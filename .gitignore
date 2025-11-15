@@ -1,0 +1,51 @@
+# ── Secrets & Environment ──────────────────────────────
+.env
+*.env
+.env.*
+!.env.example
+
+# ── Python ─────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+*.whl
+.eggs/
+
+# ── Virtual Environments ───────────────────────────────
+.venv/
+venv/
+env/
+ENV/
+
+# ── Testing & Coverage ─────────────────────────────────
+.pytest_cache/
+.coverage
+htmlcov/
+*.xml
+.tox/
+
+# ── IDE & Editor ───────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ── Logs ───────────────────────────────────────────────
+*.log
+logs/
+
+# ── Docker ─────────────────────────────────────────────
+*.dockerignore
+
+# ── Cloudflared binary (auto-downloaded) ───────────────
+cloudflared*
