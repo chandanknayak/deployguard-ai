@@ -165,7 +165,7 @@ section[data-testid="stSidebar"] .stDivider { border-color:#1e293b !important; }
 
 def _init_state() -> None:
     if "api_url" not in st.session_state:
-        st.session_state.api_url = os.environ.get("DASHBOARD_API_URL", "http://localhost:8080")
+        st.session_state.api_url = os.environ.get("DASHBOARD_API_URL", "https://deployguard-ai.onrender.com")
     if "data_source" not in st.session_state:
         st.session_state.data_source = "live"
     if "selected_assessment" not in st.session_state:
@@ -230,6 +230,18 @@ def render_sidebar(client: APIClient) -> tuple[dict, bool]:
         )
         if api_url_input != st.session_state.api_url:
             st.session_state.api_url = api_url_input
+            st.rerun()
+
+        # Server preset quick-buttons
+        btn_c1, btn_c2 = st.columns(2)
+        with btn_c1:
+            if st.button("☁️ Render", use_container_width=True, help="Connect to 24/7 Render Cloud API"):
+                st.session_state.api_url = "https://deployguard-ai.onrender.com"
+                st.rerun()
+        with btn_c2:
+            if st.button("💻 Local", use_container_width=True, help="Connect to localhost:8080"):
+                st.session_state.api_url = "http://localhost:8080"
+                st.rerun()
 
         # API health indicator
         is_live = client.is_reachable()
