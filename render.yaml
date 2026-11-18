@@ -1,0 +1,29 @@
+services:
+  # DeployGuard AI — FastAPI Webhook & Analysis Engine
+  - type: web
+    name: deployguard-api
+    env: python
+    region: oregon
+    plan: free
+    buildCommand: "pip install -e ."
+    startCommand: "python -m uvicorn deployguard.api.main:app --host 0.0.0.0 --port $PORT"
+    healthCheckPath: /healthz
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: LOG_LEVEL
+        value: INFO
+      - key: MONGODB_URI
+        sync: false
+      - key: MONGODB_DB_NAME
+        value: deployguard
+      - key: GITHUB_WEBHOOK_SECRET
+        sync: false
+      - key: GITHUB_API_TOKEN
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        value: gpt-4o
+      - key: SUPPORTED_AST_LANGUAGES
+        value: '["python"]'

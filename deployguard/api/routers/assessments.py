@@ -44,10 +44,13 @@ def _get_collection(request: Request):
     return db_client.db["risk_assessments"]
 
 
-def _sanitize(doc: dict) -> dict:
-    """Strip MongoDB ObjectId (not JSON-serializable) and return clean dict."""
-    doc.pop("_id", None)
-    return doc
+from fastapi.encoders import jsonable_encoder
+
+def _sanitize(doc: dict | list) -> Any:
+    """Recursively clean MongoDB docs (ObjectId, datetime) for JSON serialisation."""
+    if isinstance(doc, dict):
+        doc.pop("_id", None)
+    return jsonable_encoder(doc)
 
 
 # ---------------------------------------------------------------------------
@@ -135,7 +138,7 @@ async def list_assessments(
             "total": total,
             "skip": skip,
             "limit": limit,
-            "results": docs,
+            "results": _sanitize(docs),
         })
     except Exception as exc:
         logger.error("list_assessments failed: %s", exc)
@@ -161,7 +164,7 @@ async def get_assessment(request: Request, assessment_id: str) -> JSONResponse:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Assessment '{assessment_id}' not found.",
             )
-        return JSONResponse(doc)
+        return JSONResponse(_sanitize(doc))
     except HTTPException:
         raise
     except Exception as exc:
@@ -201,7 +204,7 @@ async def get_pr_assessment(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"No assessment found for PR #{pr_number} in {repo_full}.",
             )
-        return JSONResponse(doc)
+        return JSONResponse(_sanitize(doc))
     except HTTPException:
         raise
     except Exception as exc:

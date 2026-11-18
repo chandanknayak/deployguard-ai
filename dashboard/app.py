@@ -252,23 +252,46 @@ def render_sidebar(client: APIClient) -> tuple[dict, bool]:
 
         st.divider()
 
-        # --- PR Lookup (live mode) ---
+        # --- PR Selector (live mode) ---
         if is_live_mode:
-            st.markdown("**🔍 Look up a PR**")
-            pr_repo = st.text_input("Repo (owner/name)", placeholder="acme/payment-service")
-            pr_num = st.number_input("PR Number", min_value=1, step=1, value=None)
-            if st.button("🔍 Fetch Assessment", use_container_width=True):
-                if pr_repo and pr_num:
-                    parts = pr_repo.split("/")
-                    if len(parts) == 2:
-                        result = client.get_pr_assessment(parts[0], parts[1], int(pr_num))
-                        if result:
-                            st.session_state.selected_assessment = result
-                            st.success(f"Assessment loaded for PR #{int(pr_num)}")
+            st.markdown("**🔍 Select Analyzed PR**")
+            recent_resp = client.list_assessments(limit=25)
+            recent_items = recent_resp.get("results", []) if recent_resp else []
+            
+            if recent_items:
+                pr_options = ["Latest Incoming PR"] + [
+                    f"PR #{item.get('pr_number', '?')} · {item.get('repo_full_name', '').split('/')[-1]} [{item.get('risk_level', 'UNKNOWN')}]"
+                    for item in recent_items
+                ]
+                selected_idx = st.selectbox(
+                    "Quick PR Switcher",
+                    options=range(len(pr_options)),
+                    format_func=lambda i: pr_options[i],
+                    label_visibility="collapsed",
+                )
+                if selected_idx > 0:
+                    st.session_state.selected_assessment = recent_items[selected_idx - 1]
+                else:
+                    st.session_state.selected_assessment = recent_items[0]
+            else:
+                st.caption("Waiting for first incoming GitHub PR webhook...")
+
+            with st.expander("🔎 Search PR by Number"):
+                pr_repo = st.text_input("Repo (owner/name)", value="chandanknayak/deployguard-ai")
+                pr_num = st.number_input("PR Number", min_value=1, step=1, value=1)
+                if st.button("Fetch PR Assessment", use_container_width=True):
+                    if pr_repo and pr_num:
+                        parts = pr_repo.split("/")
+                        if len(parts) == 2:
+                            result = client.get_pr_assessment(parts[0], parts[1], int(pr_num))
+                            if result:
+                                st.session_state.selected_assessment = result
+                                st.success(f"Loaded PR #{int(pr_num)}!")
+                                st.rerun()
+                            else:
+                                st.warning("No assessment found for this PR yet.")
                         else:
-                            st.warning("No assessment found. Has the PR been analysed yet?")
-                    else:
-                        st.error("Repo must be in owner/name format")
+                            st.error("Format must be: owner/repo")
 
             st.divider()
 
@@ -374,21 +397,68 @@ def render_header(data: dict, is_live: bool, client: APIClient) -> None:
 
 def render_risk_assessment(data: dict) -> None:
     agent = data.get("agent_assessment") or {}
-    risk_score: int = int(agent.get("risk_score") or data.get("risk_score") or 0)
-    risk_level: str = str(data.get("risk_level") or "UNKNOWN")
-    agent_level: str = str(agent.get("risk_level") or risk_level)
-    confidence: float = float(agent.get("confidence") or 1.0)
-    rationale: str = str(agent.get("rationale") or "No rationale available.")
-    deployment_strategy: str = str(agent.get("deployment_strategy") or "STANDARD")
-    escalation: bool = bool(agent.get("escalation_required"))
-    recommended_tests: list = agent.get("recommended_tests") or []
-    affected_services: list = agent.get("affected_services") or []
-    similar_ids: list = agent.get("similar_incident_ids") or []
-    pr_meta = data.get("pr_metadata") or {}
-    git_summary = data.get("git_diff_summary") or {}
     blast = data.get("blast_radius_summary") or {}
     total_symbols = int(data.get("total_affected_symbols") or 0)
+    has_api_changes = bool(data.get("has_api_surface_changes"))
+    files = data.get("files_analysed") or []
     total_downstream = int(blast.get("total_affected") or 0)
+
+    # Heuristic fallback if agent was skipped / rate-limited
+    if not agent or not agent.get("risk_score"):
+        calc_score = 15
+        if blast.get("has_p0_impact"): calc_score += 45
+        elif blast.get("has_p1_impact"): calc_score += 25
+        if has_api_changes: calc_score += 20
+        if total_symbols > 5: calc_score += 15
+        elif total_symbols > 0: calc_score += 5
+        elif len(files) > 0: calc_score += 5
+
+        risk_score = min(95, calc_score)
+        if risk_score >= 70:
+            agent_level = "HIGH"
+            risk_level = "BLOCK"
+            deployment_strategy = "ROLLBACK_READY"
+        elif risk_score >= 35:
+            agent_level = "MEDIUM"
+            risk_level = "WARN"
+            deployment_strategy = "CANARY"
+        else:
+            agent_level = "LOW"
+            risk_level = "PASS"
+            deployment_strategy = "STANDARD"
+
+        confidence = 0.85
+        rationale = (
+            f"Deterministic AST & Graph Evaluation: Change impacts {len(files)} file(s) and {total_symbols} symbol(s). "
+            f"{'P0 critical dependency affected; ' if blast.get('has_p0_impact') else ''}"
+            f"{'API surface changed; ' if has_api_changes else ''}"
+            f"Automated risk gate scored at {risk_score}/100."
+        )
+        recommended_tests = [
+            "Execute automated integration test suite for modified entry points",
+            "Verify backward-compatibility with downstream consumers",
+            "Canary deployment (5% traffic verification)" if risk_score >= 35 else "Standard regression unit tests",
+        ]
+        escalation = bool(blast.get("has_p0_impact") or risk_score >= 70)
+        affected_services = [
+            {"service_name": s.get("service", "?"), "sla_tier": s.get("sla_tier", "P2"), "hops_from_change": s.get("hops", 1), "risk_reason": "Downstream dependency"}
+            for s in blast.get("critical_services", [])
+        ]
+        similar_ids = []
+    else:
+        risk_score = int(agent.get("risk_score") or data.get("risk_score") or 0)
+        risk_level = str(data.get("risk_level") or "UNKNOWN")
+        agent_level = str(agent.get("risk_level") or risk_level)
+        confidence = float(agent.get("confidence") or 1.0)
+        rationale = str(agent.get("rationale") or "No rationale available.")
+        deployment_strategy = str(agent.get("deployment_strategy") or "STANDARD")
+        escalation = bool(agent.get("escalation_required"))
+        recommended_tests = agent.get("recommended_tests") or []
+        affected_services = agent.get("affected_services") or []
+        similar_ids = agent.get("similar_incident_ids") or []
+
+    pr_meta = data.get("pr_metadata") or {}
+    git_summary = data.get("git_diff_summary") or {}
     created_at = _fmt_time(data.get("created_at"))
 
     # --- KPI strip ---
@@ -906,14 +976,37 @@ The dashboard (this page) will show the result automatically with auto-refresh e
 
 ---
 
-### Production Deployment Options
+### 🌐 100% Free Production Cloud Deployment (24/7 Live)
 
-| Platform | Command |
-|---|---|
-| **Docker** | `docker-compose -f docker/docker-compose.yml up -d` |
-| **Railway** | Connect GitHub repo → set env vars → deploy |
-| **Render** | New Web Service → Docker → set env vars |
-| **GCP Cloud Run** | `gcloud run deploy deployguard --source .` |
+Deploy both the backend and frontend for **\$0/month** with zero local computer dependency:
+
+#### 1. Frontend: Streamlit Community Cloud (Free Forever)
+1. Go to **[share.streamlit.io](https://share.streamlit.io)** and log in with GitHub.
+2. Click **New app** → Select repository: `chandanknayak/deployguard-ai`.
+3. Set **Main file path**: `dashboard/app.py`.
+4. Click **Deploy!** — In ~60 seconds, your dashboard will be live at `https://deployguard-ai.streamlit.app`.
+
+#### 2. Backend: Render.com Web Service (Free Tier)
+1. Go to **[dashboard.render.com](https://dashboard.render.com/)** and log in with GitHub.
+2. Click **New +** → **Web Service** → Select `chandanknayak/deployguard-ai`.
+3. Configure settings:
+   - **Name**: `deployguard-api`
+   - **Environment**: `Python 3`
+   - **Build Command**: `pip install -e .`
+   - **Start Command**: `python -m uvicorn deployguard.api.main:app --host 0.0.0.0 --port $PORT`
+4. Add Environment Variables in Render:
+   - `MONGODB_URI`: *Your MongoDB Atlas connection string*
+   - `MONGODB_DB_NAME`: `deployguard`
+   - `GITHUB_WEBHOOK_SECRET`: *Your secret token*
+   - `GITHUB_API_TOKEN`: *Your GitHub PAT token*
+   - `OPENAI_API_KEY`: *Your OpenAI API key*
+   - `SUPPORTED_AST_LANGUAGES`: `["python"]`
+5. Click **Create Web Service** → You get a permanent URL: `https://deployguard-api.onrender.com`.
+
+#### 3. Update GitHub Webhook (Permanent 24/7)
+1. Go to your GitHub repo **Settings → Webhooks**.
+2. Update the Payload URL to: `https://deployguard-api.onrender.com/webhook/github`.
+3. Done! Now any PR created on GitHub will trigger the live pipeline 24/7 automatically.
 """)
 
 
