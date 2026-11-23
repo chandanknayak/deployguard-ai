@@ -17,7 +17,7 @@ import requests
 # ---------------------------------------------------------------------------
 # API base URL — reads from environment or falls back to localhost
 # ---------------------------------------------------------------------------
-_DEFAULT_API_URL = os.environ.get("DASHBOARD_API_URL", "http://localhost:8080")
+_DEFAULT_API_URL = os.environ.get("DASHBOARD_API_URL", "https://deployguard-ai.onrender.com")
 
 
 class APIClient:
@@ -29,7 +29,7 @@ class APIClient:
     library rather than ``httpx.AsyncClient``.
     """
 
-    def __init__(self, base_url: str = _DEFAULT_API_URL, timeout: int = 10) -> None:
+    def __init__(self, base_url: str = _DEFAULT_API_URL, timeout: int = 20) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self._session = requests.Session()
