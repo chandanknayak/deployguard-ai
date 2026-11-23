@@ -34,11 +34,12 @@ import time
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
+from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.responses import Response
 
@@ -46,6 +47,8 @@ from deployguard.agent.risk_agent import RiskAssessmentAgent
 from deployguard.api.routers import webhook
 from deployguard.api.routers import assessments
 from deployguard.api.routers import enterprise
+from deployguard.api.routers import auth as auth_router
+from deployguard.api.routers import repos as repos_router
 from deployguard.config import settings
 from deployguard.db.client import MongoDBClient
 
@@ -201,6 +204,22 @@ def create_app() -> FastAPI:
     app.include_router(webhook.router)
     app.include_router(assessments.router)
     app.include_router(enterprise.router)
+    app.include_router(auth_router.router)
+    app.include_router(repos_router.router)
+
+    # -----------------------------------------------------------------------
+    # Web App UI (Single Page Application)
+    # -----------------------------------------------------------------------
+    _static_dir = Path(__file__).resolve().parent.parent / "static"
+
+    @app.get("/", include_in_schema=False)
+    @app.get("/app", include_in_schema=False)
+    async def serve_webapp() -> Response:
+        """Serve the modern DeployGuard AI Enterprise Web Application."""
+        index_file = _static_dir / "index.html"
+        if index_file.exists():
+            return FileResponse(str(index_file), media_type="text/html")
+        return JSONResponse({"status": "ok", "service": settings.app_name})
 
     # -----------------------------------------------------------------------
     # Health & Observability Endpoints
