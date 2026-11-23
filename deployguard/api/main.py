@@ -45,6 +45,7 @@ from starlette.responses import Response
 from deployguard.agent.risk_agent import RiskAssessmentAgent
 from deployguard.api.routers import webhook
 from deployguard.api.routers import assessments
+from deployguard.api.routers import enterprise
 from deployguard.config import settings
 from deployguard.db.client import MongoDBClient
 
@@ -199,6 +200,7 @@ def create_app() -> FastAPI:
     # -----------------------------------------------------------------------
     app.include_router(webhook.router)
     app.include_router(assessments.router)
+    app.include_router(enterprise.router)
 
     # -----------------------------------------------------------------------
     # Health & Observability Endpoints

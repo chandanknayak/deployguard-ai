@@ -8,6 +8,117 @@ source of truth so the UI works 100% offline without MongoDB or OpenAI.
 
 from __future__ import annotations
 
+DEMO_RISK_FREE_RESULT: dict = {
+    "assessment_id": "dg-demo-preview-safe-2a10",
+    "pr_number": 4822,
+    "repo_full_name": "acme/payment-service",
+    "head_sha": "9a8b7c6d5e4f3a2b1c0d",
+    "risk_level": "PASS",
+    "risk_score": 18,
+    "files_analysed": [
+        {
+            "filename": "deployguard/metrics/collector.py",
+            "language": "python",
+            "is_ast_eligible": True,
+            "total_modified_lines": 35,
+            "affected_symbols": [
+                {
+                    "qualified_name": "TelemetryCollector.record_latency",
+                    "kind": "method",
+                    "start_line": 20,
+                    "end_line": 35,
+                    "route_path": None,
+                    "http_methods": [],
+                }
+            ],
+        }
+    ],
+    "total_affected_symbols": 1,
+    "has_api_surface_changes": False,
+    "blast_radius_summary": {
+        "origin_service": "payment-service",
+        "total_affected": 0,
+        "has_p0_impact": False,
+        "has_p1_impact": False,
+        "critical_services": [],
+    },
+    "agent_assessment": {
+        "risk_score": 18,
+        "risk_level": "LOW",
+        "confidence": 0.95,
+        "rationale": "Non-breaking telemetry addition. No downstream dependencies impacted, API contracts preserved. Safe for immediate automated merge.",
+        "deployment_strategy": "STANDARD",
+        "escalation_required": False,
+        "recommended_tests": [
+            "Unit tests for TelemetryCollector.record_latency",
+            "Verify Prometheus metric output matches expected Prometheus format",
+        ],
+        "affected_services": [],
+        "similar_incident_ids": [],
+    },
+    "pr_metadata": {
+        "number": 4822,
+        "title": "feat(auth): add rate-limiting metrics and token refresh telemetry",
+        "author": "sarah-connor",
+        "head_branch": "feat-telemetry",
+        "base_branch": "main",
+        "url": "https://github.com/acme/payment-service/pull/4822",
+    },
+    "git_diff_summary": {
+        "files_changed": 1,
+        "lines_added": 35,
+        "lines_removed": 0,
+    },
+}
+
+DEMO_PRS: list[dict] = [
+    {
+        "number": 4822,
+        "title": "feat(auth): add rate-limiting metrics and token refresh telemetry",
+        "author": "sarah-connor",
+        "head_branch": "feat-telemetry",
+        "base_branch": "main",
+        "head_sha": "9a8b7c6d5e4f3a2b1c0d",
+        "html_url": "https://github.com/acme/payment-service/pull/4822",
+        "draft": False,
+        "created_at": "2026-11-20T10:15:00Z",
+        "risk_level": "PASS",
+        "risk_score": 18,
+        "is_risk_free": True,
+        "assessment_id": "dg-demo-preview-safe-2a10",
+    },
+    {
+        "number": 4821,
+        "title": "refactor(core): update card charge authorization pipeline and schema",
+        "author": "alex-dev",
+        "head_branch": "refactor-payments",
+        "base_branch": "main",
+        "head_sha": "c7d3e8f1a2b5094d6e81",
+        "html_url": "https://github.com/acme/payment-service/pull/4821",
+        "draft": False,
+        "created_at": "2026-11-19T14:32:00Z",
+        "risk_level": "BLOCK",
+        "risk_score": 78,
+        "is_risk_free": False,
+        "assessment_id": "dg-demo-preview-7f91c",
+    },
+    {
+        "number": 4825,
+        "title": "fix(vault): patch timeout during token exchange in auth gateway",
+        "author": "johndoe",
+        "head_branch": "fix-vault-timeout",
+        "base_branch": "main",
+        "head_sha": "1f2e3d4c5b6a79801234",
+        "html_url": "https://github.com/acme/payment-service/pull/4825",
+        "draft": False,
+        "created_at": "2026-11-21T08:20:00Z",
+        "risk_level": "WARN",
+        "risk_score": 45,
+        "is_risk_free": False,
+        "assessment_id": "dg-demo-preview-warn-3c12",
+    },
+]
+
 DEMO_RESULT: dict = {
     "assessment_id": "dg-demo-preview-7f91c",
     "pr_number": 4821,

@@ -154,6 +154,51 @@ class GitHubClient:
         response = await self._post(url, json_data=payload)
         return response.json()
 
+    async def list_pull_requests(self, state: str = "open") -> list[dict]:
+        """Fetch list of pull requests for the repository."""
+        url = f"{self._base_url}/repos/{self._repo}/pulls"
+        response = await self._get(url, accept=_ACCEPT_JSON, params={"state": state, "per_page": 30})
+        return response.json()
+
+    async def get_pull_request(self, pr_number: int) -> dict:
+        """Fetch detailed information for a single pull request."""
+        url = f"{self._base_url}/repos/{self._repo}/pulls/{pr_number}"
+        response = await self._get(url, accept=_ACCEPT_JSON)
+        return response.json()
+
+    async def merge_pull_request(
+        self,
+        pr_number: int,
+        commit_title: str | None = None,
+        commit_message: str | None = None,
+        merge_method: str = "squash",
+    ) -> dict:
+        """
+        Merge a pull request via GitHub REST API.
+
+        Args:
+            pr_number: Number of the pull request to merge.
+            commit_title: Title for the merge commit (optional).
+            commit_message: Extra detail for the merge commit (optional).
+            merge_method: Merge method: 'merge', 'squash', or 'rebase'.
+        """
+        url = f"{self._base_url}/repos/{self._repo}/pulls/{pr_number}/merge"
+        payload: dict[str, str] = {"merge_method": merge_method}
+        if commit_title:
+            payload["commit_title"] = commit_title
+        if commit_message:
+            payload["commit_message"] = commit_message
+
+        logger.info("Merging PR #%d on %s via method=%s...", pr_number, self._repo, merge_method)
+        response = await self._put(url, json_data=payload)
+        return response.json()
+
+    async def list_user_repositories(self) -> list[dict]:
+        """Fetch repositories accessible by the current authenticated user/token."""
+        url = f"{self._base_url}/user/repos"
+        response = await self._get(url, accept=_ACCEPT_JSON, params={"sort": "updated", "per_page": 50})
+        return response.json()
+
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
@@ -199,6 +244,28 @@ class GitHubClient:
             raise RuntimeError("GitHubClient must be used as an async context manager.")
 
         response = await self._client.post(
+            url,
+            headers={"Accept": accept},
+            json=json_data,
+        )
+        self._check_rate_limit(response)
+
+        if response.is_error:
+            self._handle_error(response, url)
+
+        return response
+
+    async def _put(
+        self,
+        url: str,
+        json_data: dict,
+        accept: str = _ACCEPT_JSON,
+    ) -> httpx.Response:
+        """Internal PUT request helper with error handling."""
+        if self._client is None:
+            raise RuntimeError("GitHubClient must be used as an async context manager.")
+
+        response = await self._client.put(
             url,
             headers={"Accept": accept},
             json=json_data,

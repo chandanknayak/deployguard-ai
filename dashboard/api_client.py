@@ -132,3 +132,123 @@ class APIClient:
         """Return True if the API server responds to /healthz."""
         h = self.health()
         return h.get("status") == "ok"
+
+    # ------------------------------------------------------------------
+    # Enterprise Management
+    # ------------------------------------------------------------------
+
+    def get_enterprise_policy(self) -> dict:
+        """Fetch enterprise governance policy."""
+        try:
+            r = self._session.get(f"{self.base_url}/enterprise/policy", timeout=self.timeout)
+            r.raise_for_status()
+            return r.json()
+        except Exception as exc:
+            return {
+                "organization_name": "DeployGuard Enterprise",
+                "max_auto_merge_score": 35,
+                "block_on_p0_sla": True,
+                "block_on_api_changes": False,
+                "require_canary_for_medium_risk": True,
+                "enforce_branch_protection": True,
+            }
+
+    def update_enterprise_policy(self, policy: dict) -> dict:
+        """Update enterprise governance policy."""
+        try:
+            r = self._session.post(f"{self.base_url}/enterprise/policy", json=policy, timeout=self.timeout)
+            r.raise_for_status()
+            return r.json()
+        except Exception as exc:
+            return {"status": "error", "error": str(exc)}
+
+    def list_repositories(self) -> list[dict]:
+        """Fetch list of connected repositories."""
+        try:
+            r = self._session.get(f"{self.base_url}/enterprise/repos", timeout=self.timeout)
+            r.raise_for_status()
+            return r.json().get("repositories", [])
+        except Exception as exc:
+            return [
+                {
+                    "id": 1,
+                    "name": "deployguard-ai",
+                    "full_name": "chandanknayak/deployguard-ai",
+                    "owner": "chandanknayak",
+                    "private": False,
+                    "default_branch": "main",
+                    "description": "AI-Powered Release Risk & Change-Impact Platform",
+                    "html_url": "https://github.com/chandanknayak/deployguard-ai",
+                }
+            ]
+
+    def list_repo_pulls(self, owner: str, repo: str) -> list[dict]:
+        """Fetch open PRs with live risk status."""
+        try:
+            r = self._session.get(f"{self.base_url}/enterprise/repos/{owner}/{repo}/pulls", timeout=self.timeout)
+            r.raise_for_status()
+            return r.json().get("pull_requests", [])
+        except Exception as exc:
+            return []
+
+    def analyze_pr(self, owner: str, repo: str, pr_number: int) -> dict:
+        """Trigger on-demand analysis for an open PR."""
+        try:
+            r = self._session.post(f"{self.base_url}/enterprise/repos/{owner}/{repo}/pulls/{pr_number}/analyze", timeout=30)
+            r.raise_for_status()
+            return r.json()
+        except Exception as exc:
+            return {"status": "error", "error": str(exc)}
+
+    def merge_pr(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        merge_method: str = "squash",
+        override: bool = False,
+        override_reason: str | None = None,
+        operator: str = "Enterprise Admin",
+    ) -> dict:
+        """Perform one-click safe merge of a pull request."""
+        payload = {
+            "merge_method": merge_method,
+            "override": override,
+            "override_reason": override_reason,
+            "operator": operator,
+        }
+        try:
+            r = self._session.post(f"{self.base_url}/enterprise/repos/{owner}/{repo}/pulls/{pr_number}/merge", json=payload, timeout=20)
+            if not r.ok:
+                err_detail = r.json().get("detail", r.text)
+                return {"status": "error", "error": err_detail}
+            return r.json()
+        except Exception as exc:
+            return {"status": "error", "error": str(exc)}
+
+    def trigger_deploy(
+        self,
+        owner: str,
+        repo: str,
+        environment: str = "staging",
+        strategy: str = "CANARY",
+        traffic_percent: int = 5,
+        pr_number: int | None = None,
+        commit_sha: str | None = None,
+        operator: str = "DevOps Lead",
+    ) -> dict:
+        """Trigger deployment pipeline with real-time verification status."""
+        payload = {
+            "environment": environment,
+            "strategy": strategy,
+            "traffic_percent": traffic_percent,
+            "pr_number": pr_number,
+            "commit_sha": commit_sha,
+            "operator": operator,
+        }
+        try:
+            r = self._session.post(f"{self.base_url}/enterprise/repos/{owner}/{repo}/deploy", json=payload, timeout=20)
+            r.raise_for_status()
+            return r.json()
+        except Exception as exc:
+            return {"status": "error", "error": str(exc)}
