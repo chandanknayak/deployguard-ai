@@ -29,6 +29,8 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from motor.motor_asyncio import AsyncIOMotorCollection
 from pydantic import BaseModel, Field
 
+from deployguard.core.crypto import decrypt_secret, encrypt_secret
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
@@ -39,7 +41,7 @@ router = APIRouter(prefix="/auth", tags=["Authentication"])
 SECRET_KEY = os.environ.get("JWT_SECRET_KEY", "deployguard-secret-change-in-prod-32chars")
 GITHUB_CLIENT_ID = os.environ.get("GITHUB_CLIENT_ID", "")
 GITHUB_CLIENT_SECRET = os.environ.get("GITHUB_CLIENT_SECRET", "")
-FRONTEND_URL = os.environ.get("FRONTEND_URL", "https://deployguard-ai.vercel.app")
+PUBLIC_URL = os.environ.get("PUBLIC_URL", os.environ.get("FRONTEND_URL", "https://deployguard-ai.onrender.com"))
 JWT_EXPIRE_HOURS = 72
 
 _bearer = HTTPBearer(auto_error=False)
@@ -111,24 +113,37 @@ def verify_password(password: str, stored: str) -> bool:
 # ---------------------------------------------------------------------------
 
 def _users_col(request: Request) -> AsyncIOMotorCollection:
-    db = request.app.state.db.db
-    return db["users"]
+    db_client = getattr(request.app.state, "db", None)
+    if db_client is None or getattr(db_client, "db", None) is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Database unavailable. Check MongoDB connection.",
+        )
+    return db_client.db["users"]
 
 
 # ---------------------------------------------------------------------------
-# Auth dependency
+# Auth dependencies
 # ---------------------------------------------------------------------------
+
+
+def _extract_bearer(
+    request: Request,
+    creds: Annotated[Optional[HTTPAuthorizationCredentials], Depends(_bearer)] = None,
+) -> str | None:
+    if creds:
+        return creds.credentials
+    auth_hdr = request.headers.get("Authorization", "")
+    if auth_hdr.lower().startswith("bearer "):
+        return auth_hdr[7:].strip()
+    return None
+
 
 async def get_current_user(
     request: Request,
     creds: Annotated[Optional[HTTPAuthorizationCredentials], Depends(_bearer)] = None,
 ) -> dict:
-    token = None
-    if creds:
-        token = creds.credentials
-    elif "Authorization" in request.headers:
-        token = request.headers["Authorization"].replace("Bearer ", "")
-
+    token = _extract_bearer(request, creds)
     if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
@@ -137,11 +152,44 @@ async def get_current_user(
         raise HTTPException(status_code=401, detail="Invalid or expired token")
 
     col = _users_col(request)
-    user = await col.find_one({"email": payload["email"]})
+    email = str(payload.get("email", "")).strip().lower()
+    user = await col.find_one({"email": email})
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
 
     user["_id"] = str(user["_id"])
+    # Decrypt GitHub PAT transparently for authenticated downstream API handlers
+    if user.get("github_access_token"):
+        try:
+            user["github_access_token"] = decrypt_secret(user["github_access_token"])
+        except Exception:
+            logger.warning("Could not decrypt stored GitHub token for %s", email)
+            user["github_access_token"] = None
+    return user
+
+
+async def get_optional_current_user(
+    request: Request,
+    creds: Annotated[Optional[HTTPAuthorizationCredentials], Depends(_bearer)] = None,
+) -> dict | None:
+    """Return authenticated user dict if valid Bearer token is present, else None."""
+    token = _extract_bearer(request, creds)
+    if not token:
+        return None
+    payload = verify_jwt(token)
+    if not payload:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    col = _users_col(request)
+    email = str(payload.get("email", "")).strip().lower()
+    user = await col.find_one({"email": email})
+    if not user:
+        return None
+    user["_id"] = str(user["_id"])
+    if user.get("github_access_token"):
+        try:
+            user["github_access_token"] = decrypt_secret(user["github_access_token"])
+        except Exception:
+            user["github_access_token"] = None
     return user
 
 
@@ -178,16 +226,20 @@ class UserOut(BaseModel):
 @router.post("/register", summary="Register with email + password")
 async def register(body: RegisterRequest, request: Request):
     col = _users_col(request)
-    existing = await col.find_one({"email": body.email})
+    email = body.email.strip().lower()
+    if "@" not in email or "." not in email.split("@")[-1]:
+        raise HTTPException(status_code=400, detail="Enter a valid work email address")
+
+    existing = await col.find_one({"email": email})
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
 
     now = datetime.now(timezone.utc).isoformat()
     user_doc = {
-        "email": body.email,
+        "email": email,
         "password_hash": hash_password(body.password),
-        "full_name": body.full_name,
-        "company": body.company,
+        "full_name": body.full_name.strip(),
+        "company": body.company.strip(),
         "github_username": None,
         "github_access_token": None,
         "github_connected": False,
@@ -198,14 +250,14 @@ async def register(body: RegisterRequest, request: Request):
     }
     await col.insert_one(user_doc)
 
-    token = create_jwt({"email": body.email, "full_name": body.full_name})
+    token = create_jwt({"email": email, "full_name": user_doc["full_name"]})
     return {
         "access_token": token,
         "token_type": "bearer",
         "user": {
-            "email": body.email,
-            "full_name": body.full_name,
-            "company": body.company,
+            "email": email,
+            "full_name": user_doc["full_name"],
+            "company": user_doc["company"],
             "github_connected": False,
             "plan": "free",
             "created_at": now,
@@ -216,7 +268,8 @@ async def register(body: RegisterRequest, request: Request):
 @router.post("/login", summary="Login with email + password")
 async def login(body: LoginRequest, request: Request):
     col = _users_col(request)
-    user = await col.find_one({"email": body.email})
+    email = body.email.strip().lower()
+    user = await col.find_one({"email": email})
     if not user or not verify_password(body.password, user.get("password_hash", "")):
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
@@ -243,14 +296,14 @@ async def github_oauth_start(request: Request):
         raise HTTPException(status_code=503, detail="GitHub OAuth not configured")
 
     state = secrets.token_urlsafe(16)
-    # Store state in a simple in-memory dict (fine for single-instance)
     _oauth_states[state] = time.time()
+    base = str(request.base_url).rstrip("/") if request else PUBLIC_URL.rstrip("/")
 
     params = {
         "client_id": GITHUB_CLIENT_ID,
         "scope": "read:user user:email repo",
         "state": state,
-        "redirect_uri": f"{FRONTEND_URL}/api/auth/github/callback",
+        "redirect_uri": f"{base}/auth/github/callback",
     }
     return RedirectResponse(f"https://github.com/login/oauth/authorize?{urlencode(params)}")
 
@@ -310,39 +363,37 @@ async def github_oauth_callback(
             primary = next((e["email"] for e in emails if e.get("primary")), None)
             gh_user["email"] = primary
 
-    email = gh_user.get("email")
+    email = (gh_user.get("email") or f"{username}@github.com").strip().lower()
     username = gh_user.get("login")
+    encrypted_gh_token = encrypt_secret(gh_access_token)
 
     col = _users_col(request)
     now = datetime.now(timezone.utc).isoformat()
 
     if token:
-        # Connect GitHub to existing logged-in user
         payload = verify_jwt(token)
         if not payload:
             raise HTTPException(status_code=401, detail="Invalid JWT")
         await col.update_one(
-            {"email": payload["email"]},
+            {"email": payload["email"].strip().lower()},
             {"$set": {
                 "github_username": username,
-                "github_access_token": gh_access_token,
+                "github_access_token": encrypted_gh_token,
                 "github_connected": True,
                 "updated_at": now,
             }},
         )
         return {"message": "GitHub connected successfully", "github_username": username}
 
-    # Login or register via GitHub
-    user = await col.find_one({"email": email}) if email else None
+    user = await col.find_one({"email": email})
     if not user:
-        # Register new user via GitHub
         user_doc = {
-            "email": email or f"{username}@github.com",
+            "email": email,
             "password_hash": "",
             "full_name": gh_user.get("name") or username,
             "company": gh_user.get("company") or "",
             "github_username": username,
-            "github_access_token": gh_access_token,
+            "github_access_token": encrypted_gh_token,
             "github_connected": True,
             "connected_repos": [],
             "plan": "free",
@@ -351,33 +402,33 @@ async def github_oauth_callback(
         }
         await col.insert_one(user_doc)
         user = user_doc
-
     else:
-        # Update existing user's GitHub token
         await col.update_one(
             {"email": email},
             {"$set": {
                 "github_username": username,
-                "github_access_token": gh_access_token,
+                "github_access_token": encrypted_gh_token,
                 "github_connected": True,
                 "updated_at": now,
             }},
         )
 
-    jwt = create_jwt({"email": user["email"], "full_name": user.get("full_name", username)})
-    return {
-        "access_token": jwt,
-        "token_type": "bearer",
-        "user": {
-            "email": user.get("email"),
-            "full_name": user.get("full_name"),
-            "company": user.get("company", ""),
-            "github_connected": True,
-            "github_username": username,
-            "plan": user.get("plan", "free"),
-            "created_at": user.get("created_at", now),
-        },
-    }
+    jwt_tok = create_jwt({"email": user["email"], "full_name": user.get("full_name", username)})
+    if "application/json" in request.headers.get("accept", ""):
+        return {
+            "access_token": jwt_tok,
+            "token_type": "bearer",
+            "user": {
+                "email": user.get("email"),
+                "full_name": user.get("full_name"),
+                "company": user.get("company", ""),
+                "github_connected": True,
+                "github_username": username,
+                "plan": user.get("plan", "free"),
+                "created_at": user.get("created_at", now),
+            },
+        }
+    return RedirectResponse(f"/?oauth_token={jwt_tok}")
 
 
 @router.get("/me", summary="Get current user profile")
@@ -445,7 +496,7 @@ async def connect_github_pat(
         {"email": current_user["email"]},
         {"$set": {
             "github_username": username,
-            "github_access_token": body.github_token,
+            "github_access_token": encrypt_secret(body.github_token),
             "github_connected": True,
             "updated_at": now,
         }},
@@ -454,4 +505,24 @@ async def connect_github_pat(
         "github_connected": True,
         "github_username": username,
         "available_repos": available_repos,
+        "encrypted_at_rest": True,
     }
+
+
+@router.post("/disconnect-github", summary="Unlink GitHub account from user profile")
+async def disconnect_github(
+    request: Request,
+    current_user: Annotated[dict, Depends(get_current_user)],
+):
+    """Remove stored GitHub token and unlink username."""
+    col = _users_col(request)
+    await col.update_one(
+        {"email": current_user["email"]},
+        {"$set": {
+            "github_username": None,
+            "github_access_token": None,
+            "github_connected": False,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }},
+    )
+    return {"github_connected": False, "github_username": None}

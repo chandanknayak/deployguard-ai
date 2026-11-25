@@ -196,6 +196,40 @@ class AnalysisResult(BaseModel):
         description="Summary of downstream affected services and critical SLA paths.",
     )
 
+    # Provenance & Deterministic Breakdown Metadata
+    source: str = Field(
+        default="MANUAL_SCAN",
+        description="Assessment origin: GITHUB_WEBHOOK, MANUAL_SCAN, or SIMULATION.",
+    )
+    status: str = Field(
+        default="COMPLETED",
+        description="Processing state: QUEUED, RUNNING, COMPLETED, or FAILED.",
+    )
+    owner_email: str | None = Field(
+        default=None,
+        description="Tenant email that initiated the scan (for multi-tenant isolation).",
+    )
+    is_docs_or_config_only: bool = Field(
+        default=False,
+        description="True if PR modifies only docs/assets/non-runtime files.",
+    )
+    signal_breakdown: dict[str, int] = Field(
+        default_factory=dict,
+        description="40/30/20/10 signal percentages: ast, blast, critical_path, test_gap.",
+    )
+    breaking_changes: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="List of breaking API/signature removals or changes detected by AST diff.",
+    )
+    dependency_edges: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Cross-file dependency edges (file -> symbol -> consumer).",
+    )
+    diff_preview: list[dict[str, str]] = Field(
+        default_factory=list,
+        description="Concise AST/diff snippet lines for UI display.",
+    )
+
     error: str | None = Field(
         default=None,
         description="Top-level error message if the entire analysis pipeline failed.",

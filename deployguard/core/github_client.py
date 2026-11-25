@@ -49,10 +49,16 @@ class GitHubClient:
             await client.create_commit_status(sha="abc", state="success", description="Risk: 12/100")
     """
 
-    def __init__(self, repo_full_name: str, timeout_seconds: float = 30.0) -> None:
+    def __init__(
+        self,
+        repo_full_name: str,
+        timeout_seconds: float = 30.0,
+        token: str | None = None,
+    ) -> None:
         self._repo = repo_full_name
         self._base_url = str(settings.github_api_base_url).rstrip("/")
         self._timeout = httpx.Timeout(timeout=timeout_seconds)
+        self._token = token if token is not None else settings.github_api_token.get_secret_value()
         self._client: httpx.AsyncClient | None = None
 
     async def __aenter__(self) -> "GitHubClient":
@@ -146,6 +152,91 @@ class GitHubClient:
         response = await self._post(url, json_data=payload)
         return response.json()
 
+    async def try_get_file_content(self, file_path: str, ref: str) -> str | None:
+        """Fetch raw source content of a file at ref, returning None if missing (e.g. new/deleted)."""
+        try:
+            return await self.get_file_content(file_path, ref)
+        except GitHubAPIError as exc:
+            if exc.status_code in (404, 422):
+                return None
+            raise
+
+    async def get_repo_python_files(self, ref: str, max_files: int = 12) -> list[str]:
+        """List up to ``max_files`` Python source paths from the repo tree at ``ref``."""
+        try:
+            url = f"{self._base_url}/repos/{self._repo}/git/trees/{ref}"
+            response = await self._get(url, accept=_ACCEPT_JSON, params={"recursive": "1"})
+            tree = response.json().get("tree", [])
+            py_paths = [
+                item["path"]
+                for item in tree
+                if item.get("type") == "blob"
+                and str(item.get("path", "")).endswith(".py")
+                and "/tests/" not in f"/{item.get('path', '')}"
+                and not str(item.get("path", "")).startswith("tests/")
+            ]
+            return py_paths[:max_files]
+        except Exception as exc:
+            logger.debug("Could not list repo tree for %s@%s: %s", self._repo, ref[:8], exc)
+            return []
+
+    async def create_check_run(
+        self,
+        sha: str,
+        conclusion: str,
+        title: str,
+        summary: str,
+        name: str = "DeployGuard AI Risk Gate",
+        details_url: str | None = None,
+        annotations: list[dict] | None = None,
+    ) -> dict:
+        """
+        Create a GitHub Check Run on the PR head commit.
+
+        Automatically falls back to ``create_commit_status`` if the token does
+        not carry ``checks:write`` permission (HTTP 403/404).
+        """
+        url = f"{self._base_url}/repos/{self._repo}/check-runs"
+        output: dict[str, object] = {
+            "title": title[:250],
+            "summary": summary[:65000],
+        }
+        if annotations:
+            output["annotations"] = annotations[:20]
+
+        payload: dict[str, object] = {
+            "name": name,
+            "head_sha": sha,
+            "status": "completed",
+            "conclusion": conclusion,
+            "output": output,
+        }
+        if details_url:
+            payload["details_url"] = details_url
+
+        try:
+            response = await self._post(url, json_data=payload)
+            return response.json()
+        except GitHubAPIError as exc:
+            if exc.status_code in (403, 404, 422):
+                logger.info(
+                    "Check Runs API unavailable (%s); falling back to Commit Status.",
+                    exc.status_code,
+                )
+                status_map = {
+                    "success": "success",
+                    "neutral": "success",
+                    "action_required": "success",
+                    "failure": "failure",
+                }
+                return await self.create_commit_status(
+                    sha=sha,
+                    state=status_map.get(conclusion, "success"),
+                    description=title[:140],
+                    target_url=details_url,
+                )
+            raise
+
     async def post_pr_comment(self, pr_number: int, body: str) -> dict:
         """Post a Markdown review comment on a Pull Request."""
         url = f"{self._base_url}/repos/{self._repo}/issues/{pr_number}/comments"
@@ -153,6 +244,30 @@ class GitHubClient:
         logger.info("Posting review comment on PR #%d (chars=%d)...", pr_number, len(body))
         response = await self._post(url, json_data=payload)
         return response.json()
+
+    async def upsert_pr_comment(
+        self,
+        pr_number: int,
+        body: str,
+        marker: str = "<!-- deployguard-ai-report -->",
+    ) -> dict:
+        """Create or update the existing DeployGuard bot summary comment on a PR."""
+        marked_body = body if marker in body else f"{marker}\n{body}"
+        try:
+            list_url = f"{self._base_url}/repos/{self._repo}/issues/{pr_number}/comments"
+            resp = await self._get(list_url, accept=_ACCEPT_JSON, params={"per_page": 50})
+            comments = resp.json() if isinstance(resp.json(), list) else []
+            existing = next(
+                (c for c in comments if marker in (c.get("body") or "")),
+                None,
+            )
+            if existing and existing.get("id"):
+                patch_url = f"{self._base_url}/repos/{self._repo}/issues/comments/{existing['id']}"
+                updated = await self._patch(patch_url, json_data={"body": marked_body})
+                return updated.json()
+        except Exception as exc:
+            logger.debug("Upsert comment lookup fallback to post: %s", exc)
+        return await self.post_pr_comment(pr_number=pr_number, body=marked_body)
 
     async def list_pull_requests(self, state: str = "open") -> list[dict]:
         """Fetch list of pull requests for the repository."""
@@ -205,11 +320,37 @@ class GitHubClient:
 
     def _build_headers(self) -> dict[str, str]:
         """Construct standard headers sent with every request."""
-        return {
-            "Authorization": f"Bearer {settings.github_api_token.get_secret_value()}",
+        headers = {
             "X-GitHub-Api-Version": "2022-11-28",
             "User-Agent": f"DeployGuard-AI/{settings.app_name}",
         }
+        if self._token and not self._token.startswith("ghp_dev_mock"):
+            headers["Authorization"] = f"Bearer {self._token}"
+        elif self._token and "api.github.com" not in self._base_url:
+            headers["Authorization"] = f"Bearer {self._token}"
+        return headers
+
+    async def _patch(
+        self,
+        url: str,
+        json_data: dict,
+        accept: str = _ACCEPT_JSON,
+    ) -> httpx.Response:
+        """Internal PATCH request helper with error handling."""
+        if self._client is None:
+            raise RuntimeError("GitHubClient must be used as an async context manager.")
+
+        response = await self._client.patch(
+            url,
+            headers={"Accept": accept},
+            json=json_data,
+        )
+        self._check_rate_limit(response)
+
+        if response.is_error:
+            self._handle_error(response, url)
+
+        return response
 
     async def _get(
         self,

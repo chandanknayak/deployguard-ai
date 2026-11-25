@@ -1,25 +1,20 @@
 """
-api/routers/repos.py — Per-user repository management & PR analysis
-
-Endpoints:
-  GET  /repos                      — list user's connected repos
-  POST /repos/connect              — connect a GitHub repo
-  DELETE /repos/{owner}/{repo}     — disconnect a repo
-  GET  /repos/{owner}/{repo}/pulls — list open PRs with risk data
-  POST /repos/{owner}/{repo}/pulls/{pr}/analyze — trigger analysis
-  POST /repos/{owner}/{repo}/pulls/{pr}/merge   — merge after gate check
+api/routers/repos.py — Per-user repository management, PR scanning, re-sync, and gated merge.
 """
 
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from typing import Annotated, Optional
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from fastapi.encoders import jsonable_encoder
+from pydantic import BaseModel, Field
 
 from deployguard.api.routers.auth import get_current_user
+from deployguard.core.pipeline import run_pr_analysis
 
 logger = logging.getLogger(__name__)
 
@@ -33,11 +28,13 @@ router = APIRouter(prefix="/repos", tags=["Repositories"])
 class ConnectRepoRequest(BaseModel):
     owner: str
     repo: str
+    sla_tier: str = Field(default="P0", pattern="^(P0|P1|P2|P3)$")
 
 
 class MergeRequest(BaseModel):
     merge_method: str = "merge"   # merge | squash | rebase
     admin_override: bool = False
+    override: bool = False        # Alias accepted for API compatibility
     override_reason: str = ""
 
 
@@ -46,42 +43,40 @@ class MergeRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 def _db(request: Request):
-    return request.app.state.db.db
+    db_client = getattr(request.app.state, "db", None)
+    if db_client is None or getattr(db_client, "db", None) is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    return db_client.db
 
 
-async def _gh_get(url: str, token: str) -> dict | list:
+def _gh_headers(token: str | None) -> dict[str, str]:
+    headers = {"Accept": "application/vnd.github.v3+json"}
+    if token:
+        headers["Authorization"] = f"token {token}"
+    return headers
+
+
+async def _gh_get(url: str, token: str | None) -> dict | list:
     async with httpx.AsyncClient() as client:
-        r = await client.get(
-            url,
-            headers={
-                "Authorization": f"token {token}",
-                "Accept": "application/vnd.github.v3+json",
-            },
-            timeout=15,
-        )
+        r = await client.get(url, headers=_gh_headers(token), timeout=15)
         r.raise_for_status()
         return r.json()
 
 
-async def _gh_post(url: str, token: str, body: dict) -> dict:
+async def _gh_put(url: str, token: str, body: dict) -> httpx.Response:
     async with httpx.AsyncClient() as client:
-        r = await client.post(
-            url,
-            json=body,
-            headers={
-                "Authorization": f"token {token}",
-                "Accept": "application/vnd.github.v3+json",
-            },
-            timeout=15,
-        )
-        return r.json()
+        return await client.put(url, json=body, headers=_gh_headers(token), timeout=15)
 
 
 async def _get_risk_for_pr(db, owner: str, repo: str, pr_number: int) -> Optional[dict]:
-    """Fetch latest risk assessment from MongoDB for this PR."""
+    """Fetch latest completed live/manual assessment from MongoDB for this PR."""
     col = db["risk_assessments"]
     doc = await col.find_one(
-        {"repo_full_name": f"{owner}/{repo}", "pr_number": pr_number},
+        {
+            "repo_full_name": f"{owner}/{repo}",
+            "pr_number": pr_number,
+            "source": {"$ne": "SIMULATION"},
+        },
         sort=[("created_at", -1)],
     )
     if doc:
@@ -89,11 +84,66 @@ async def _get_risk_for_pr(db, owner: str, repo: str, pr_number: int) -> Optiona
     return doc
 
 
+def _enrich_pr_item(pr: dict, repo_name: str, risk: dict | None) -> dict:
+    """Map raw GitHub PR + MongoDB assessment to normalized UI payload."""
+    agent = (risk or {}).get("agent_assessment") or {}
+    blast = (risk or {}).get("blast_radius") or (risk or {}).get("blast_radius_summary") or {}
+    risk_level = (risk or {}).get("risk_level") or "PENDING"
+    if risk_level == "UNKNOWN":
+        risk_level = "PENDING"
+    score = (risk or {}).get("risk_score")
+    if score is None:
+        score = agent.get("risk_score", 0)
+
+    svcs = blast.get("affected_services") or [
+        s.get("service") for s in blast.get("critical_services", []) if s.get("service")
+    ] or [repo_name]
+
+    return {
+        "pr_number": pr["number"],
+        "title": pr["title"],
+        "author": (pr.get("user") or {}).get("login", "dev"),
+        "author_avatar": (pr.get("user") or {}).get("avatar_url"),
+        "branch": (pr.get("head") or {}).get("ref", "feature"),
+        "base_branch": (pr.get("base") or {}).get("ref", "main"),
+        "head_sha": (pr.get("head") or {}).get("sha", ""),
+        "created_at": pr.get("created_at"),
+        "updated_at": pr.get("updated_at"),
+        "url": pr.get("html_url"),
+        "draft": pr.get("draft", False),
+        "mergeable": pr.get("mergeable"),
+        "additions": pr.get("additions", 0),
+        "deletions": pr.get("deletions", 0),
+        "changed_files": pr.get("changed_files", 0),
+        "labels": [l["name"] for l in pr.get("labels", [])],
+        "risk_level": risk_level,
+        "risk_score": score,
+        "decision": risk.get("decision", risk_level) if risk else "PENDING",
+        "source": risk.get("source") if risk else None,
+        "status": risk.get("status", "COMPLETED") if risk else "PENDING",
+        "is_docs_or_config_only": bool(risk.get("is_docs_or_config_only")) if risk else False,
+        "signals": risk.get("signal_breakdown") or agent.get("signals") or {},
+        "breaking_changes": risk.get("breaking_changes", []) if risk else [],
+        "dependency_edges": risk.get("dependency_edges", []) if risk else [],
+        "diff_preview": risk.get("diff_preview", []) if risk else [],
+        "plain_explanation": agent.get("executive_summary") or "",
+        "rationale": agent.get("rationale") or agent.get("detailed_rationale") or "",
+        "recommended_tests": agent.get("recommended_tests", []),
+        "blast_radius": {
+            "affected_services": svcs,
+            "max_sla_tier": blast.get("max_sla_tier") or ("P0" if blast.get("has_p0_impact") else "P1"),
+            "total_downstream": len(svcs),
+        },
+        "analyzed_at": risk.get("created_at") if risk else None,
+        "assessment_id": risk.get("assessment_id") if risk else None,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
 
-@router.get("", summary="List connected repos")
+@router.get("", summary="List connected repos for current user")
 async def list_repos(current_user: Annotated[dict, Depends(get_current_user)]):
     return {"repos": current_user.get("connected_repos", [])}
 
@@ -123,44 +173,50 @@ async def list_available_github_repos(current_user: Annotated[dict, Depends(get_
         raise HTTPException(status_code=502, detail=f"GitHub API error: {e}")
 
 
-@router.post("/connect", summary="Connect a GitHub repository")
+@router.post("/connect", summary="Connect a GitHub repository (supports PAT or public repos)")
 async def connect_repo(
     body: ConnectRepoRequest,
     request: Request,
     current_user: Annotated[dict, Depends(get_current_user)],
 ):
     gh_token = current_user.get("github_access_token")
-    if not gh_token:
-        raise HTTPException(status_code=400, detail="GitHub not connected. Connect GitHub first.")
+    owner = body.owner.strip()
+    repo = body.repo.strip()
+    full_name = f"{owner}/{repo}"
 
-    # Verify repo exists and user has access
     try:
-        repo_data = await _gh_get(
-            f"https://api.github.com/repos/{body.owner}/{body.repo}",
-            gh_token,
-        )
-    except httpx.HTTPStatusError as e:
-        raise HTTPException(status_code=404, detail=f"Repo {body.owner}/{body.repo} not found or no access")
+        repo_data = await _gh_get(f"https://api.github.com/repos/{full_name}", gh_token)
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code in (401, 403, 404) and not gh_token:
+            raise HTTPException(
+                status_code=400,
+                detail="Repo not accessible publicly. Link your GitHub PAT to add private repos.",
+            )
+        raise HTTPException(status_code=404, detail=f"Repo {full_name} not found or inaccessible")
 
     repo_entry = {
-        "owner": body.owner,
-        "repo": body.repo,
-        "full_name": f"{body.owner}/{body.repo}",
-        "description": repo_data.get("description", ""),
+        "owner": owner,
+        "repo": repo,
+        "full_name": full_name,
+        "sla_tier": body.sla_tier,
+        "description": repo_data.get("description") or "",
         "private": repo_data.get("private", False),
         "default_branch": repo_data.get("default_branch", "main"),
-        "language": repo_data.get("language", ""),
+        "language": repo_data.get("language") or "",
         "stars": repo_data.get("stargazers_count", 0),
     }
 
     db = _db(request)
     col = db["users"]
-    # Avoid duplicates
     await col.update_one(
         {"email": current_user["email"]},
-        {"$addToSet": {"connected_repos": repo_entry}},
+        {"$pull": {"connected_repos": {"full_name": full_name}}},
     )
-    return {"message": f"Repo {body.owner}/{body.repo} connected!", "repo": repo_entry}
+    await col.update_one(
+        {"email": current_user["email"]},
+        {"$push": {"connected_repos": repo_entry}},
+    )
+    return {"message": f"Repo {full_name} connected!", "repo": repo_entry}
 
 
 @router.delete("/{owner}/{repo}", summary="Disconnect a repository")
@@ -179,7 +235,7 @@ async def disconnect_repo(
     return {"message": f"Repo {owner}/{repo} disconnected"}
 
 
-@router.get("/{owner}/{repo}/pulls", summary="List open PRs with risk analysis")
+@router.get("/{owner}/{repo}/pulls", summary="List open PRs with enriched risk analysis")
 async def list_pulls(
     owner: str,
     repo: str,
@@ -188,14 +244,13 @@ async def list_pulls(
     state: str = "open",
 ):
     gh_token = current_user.get("github_access_token")
-    if not gh_token:
-        raise HTTPException(status_code=400, detail="GitHub not connected")
-
     try:
         prs = await _gh_get(
             f"https://api.github.com/repos/{owner}/{repo}/pulls?state={state}&per_page=30",
             gh_token,
         )
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=502, detail=f"GitHub API error ({e.response.status_code})")
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"GitHub API error: {e}")
 
@@ -203,40 +258,18 @@ async def list_pulls(
     enriched = []
     for pr in prs:
         risk = await _get_risk_for_pr(db, owner, repo, pr["number"])
-        enriched.append({
-            "pr_number": pr["number"],
-            "title": pr["title"],
-            "author": pr["user"]["login"],
-            "author_avatar": pr["user"]["avatar_url"],
-            "branch": pr["head"]["ref"],
-            "base_branch": pr["base"]["ref"],
-            "created_at": pr["created_at"],
-            "updated_at": pr["updated_at"],
-            "url": pr["html_url"],
-            "draft": pr.get("draft", False),
-            "mergeable": pr.get("mergeable"),
-            "additions": pr.get("additions", 0),
-            "deletions": pr.get("deletions", 0),
-            "changed_files": pr.get("changed_files", 0),
-            "labels": [l["name"] for l in pr.get("labels", [])],
-            # Risk data from DeployGuard
-            "risk_level": risk["risk_level"] if risk else "PENDING",
-            "risk_score": risk.get("risk_score", 0) if risk else None,
-            "decision": risk.get("decision", "PENDING") if risk else "PENDING",
-            "blast_radius": risk.get("blast_radius", {}) if risk else {},
-            "analyzed_at": risk.get("created_at") if risk else None,
-            "assessment_id": risk.get("_id") if risk else None,
-        })
+        enriched.append(_enrich_pr_item(pr, repo, risk))
 
-    return {
+    return jsonable_encoder({
         "owner": owner,
         "repo": repo,
         "total": len(enriched),
         "pulls": enriched,
-    }
+    })
 
 
-@router.post("/{owner}/{repo}/pulls/{pr_number}/analyze", summary="Trigger manual PR analysis")
+@router.post("/{owner}/{repo}/pulls/{pr_number}/analyze", summary="Run PR risk analysis using user's token")
+@router.post("/{owner}/{repo}/pulls/{pr_number}/resync", summary="Re-sync & analyze PR on demand")
 async def analyze_pr(
     owner: str,
     repo: str,
@@ -244,37 +277,47 @@ async def analyze_pr(
     request: Request,
     current_user: Annotated[dict, Depends(get_current_user)],
 ):
-    """
-    Manually trigger DeployGuard risk analysis for a PR.
-    This calls the internal webhook processor logic.
-    """
+    """Run full AST diff, cross-file impact, and weighted 40/30/20/10 scan for PR."""
     gh_token = current_user.get("github_access_token")
-    if not gh_token:
-        raise HTTPException(status_code=400, detail="GitHub not connected")
-
-    # Fetch PR data
-    try:
-        pr_data = await _gh_get(
-            f"https://api.github.com/repos/{owner}/{repo}/pulls/{pr_number}",
-            gh_token,
-        )
-    except Exception as e:
-        raise HTTPException(status_code=404, detail=f"PR not found: {e}")
-
-    # Trigger analysis via the app's risk agent
+    repo_full = f"{owner}/{repo}"
+    db_client = getattr(request.app.state, "db", None)
     agent = getattr(request.app.state, "agent", None)
-    if not agent:
-        raise HTTPException(status_code=503, detail="Risk agent not available")
 
-    db = _db(request)
+    result = await run_pr_analysis(
+        repo_full_name=repo_full,
+        pr_number=pr_number,
+        source="MANUAL_SCAN",
+        github_token=gh_token or "",
+        db_client=db_client,
+        agent=agent,
+        owner_email=current_user["email"],
+        post_to_github=bool(gh_token),
+    )
 
-    from deployguard.api.routers.enterprise import analyze_pull_request
-    response = await analyze_pull_request(owner=owner, repo=repo, pr_number=pr_number, request=request)
-    import json
-    return json.loads(response.body.decode())
+    if result.status == "FAILED":
+        raise HTTPException(status_code=502, detail=result.error or "PR analysis failed")
+
+    # Log scan in tenant audit log
+    if db_client is not None:
+        try:
+            await db_client.db["audit_log"].insert_one({
+                "action": f"SCAN_{result.risk_level.value}",
+                "repo": repo_full,
+                "pr_number": pr_number,
+                "operator": current_user["email"],
+                "owner_email": current_user["email"],
+                "risk_score": result.risk_score,
+                "risk_level": result.risk_level.value,
+                "source": "MANUAL_SCAN",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            })
+        except Exception:
+            pass
+
+    return jsonable_encoder(result.model_dump())
 
 
-@router.post("/{owner}/{repo}/pulls/{pr_number}/merge", summary="Merge PR after gate check")
+@router.post("/{owner}/{repo}/pulls/{pr_number}/merge", summary="Merge PR after policy gate enforcement")
 async def merge_pr(
     owner: str,
     repo: str,
@@ -285,53 +328,70 @@ async def merge_pr(
 ):
     gh_token = current_user.get("github_access_token")
     if not gh_token:
-        raise HTTPException(status_code=400, detail="GitHub not connected")
+        raise HTTPException(status_code=400, detail="Link a GitHub PAT with write access to merge PRs.")
 
     db = _db(request)
+    repo_full = f"{owner}/{repo}"
     risk = await _get_risk_for_pr(db, owner, repo, pr_number)
+    policy_doc = await db["enterprise_policy"].find_one({"owner_email": current_user["email"]}) or {}
+    max_score = int(policy_doc.get("max_auto_merge_score", 35))
+    is_override = bool(body.admin_override or body.override)
 
-    # Gate check
     if risk:
-        decision = risk.get("decision", "PASS")
-        risk_score = risk.get("risk_score", 0)
-        if decision == "BLOCK" and not body.admin_override:
+        decision = risk.get("decision") or risk.get("risk_level", "PASS")
+        risk_score = int(risk.get("risk_score") or 0)
+        if (decision == "BLOCK" or risk_score > max_score) and not is_override:
             raise HTTPException(
                 status_code=403,
                 detail={
                     "error": "MERGE_BLOCKED",
-                    "reason": f"Risk score {risk_score} exceeds safe threshold. Use admin_override=true to force.",
+                    "reason": f"Risk score ({risk_score}/100, verdict {decision}) exceeds policy limit ({max_score}). Provide Admin Override to merge.",
                     "risk_level": risk.get("risk_level"),
                     "risk_score": risk_score,
                 },
             )
+    elif not is_override:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "UNSCANNED_PR",
+                "reason": "PR has not been scanned yet. Click 'Scan PR' before merging or use Admin Override.",
+            },
+        )
 
-    # Perform merge via GitHub API
-    merge_result = await _gh_post(
-        f"https://api.github.com/repos/{owner}/{repo}/pulls/{pr_number}/merge",
+    merge_resp = await _gh_put(
+        f"https://api.github.com/repos/{repo_full}/pulls/{pr_number}/merge",
         gh_token,
         {
             "merge_method": body.merge_method,
             "commit_title": f"[DeployGuard] Merge PR #{pr_number}",
-            "commit_message": f"Merged by DeployGuard AI. Risk: {risk.get('risk_level', 'UNKNOWN') if risk else 'UNANALYZED'}. Override: {body.admin_override}",
+            "commit_message": (
+                f"Merged by {current_user['email']} via DeployGuard AI. "
+                f"Score: {risk.get('risk_score', 'N/A') if risk else 'N/A'}/100. "
+                f"{'Override: ' + body.override_reason if is_override else 'Gate passed.'}"
+            ),
         },
     )
+    merge_result = merge_resp.json()
 
-    if not merge_result.get("merged"):
+    if merge_resp.is_error or not merge_result.get("merged"):
         raise HTTPException(
-            status_code=400,
-            detail=merge_result.get("message", "Merge failed"),
+            status_code=merge_resp.status_code if merge_resp.status_code >= 400 else 400,
+            detail=merge_result.get("message", "GitHub merge failed"),
         )
 
-    # Log to audit
-    from datetime import datetime, timezone
     await db["audit_log"].insert_one({
-        "action": "pr_merged",
-        "repo": f"{owner}/{repo}",
+        "action": "OVERRIDE_MERGE" if is_override else "PR_MERGED",
+        "repo": repo_full,
         "pr_number": pr_number,
         "merged_by": current_user["email"],
+        "operator": current_user["email"],
+        "owner_email": current_user["email"],
         "risk_level": risk.get("risk_level") if risk else "UNANALYZED",
-        "admin_override": body.admin_override,
+        "risk_score": risk.get("risk_score") if risk else None,
+        "admin_override": is_override,
         "override_reason": body.override_reason,
+        "source": "LIVE_MERGE",
         "timestamp": datetime.now(timezone.utc).isoformat(),
     })
 

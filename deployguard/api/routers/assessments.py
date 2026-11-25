@@ -60,23 +60,30 @@ def _sanitize(doc: dict | list) -> Any:
 @router.get(
     "/stats",
     summary="Aggregate assessment statistics",
-    description="Returns counts of PASS / WARN / BLOCK assessments, plus average risk score.",
+    description="Returns counts of PASS / WARN / BLOCK assessments (excluding simulations by default).",
 )
-async def get_stats(request: Request) -> JSONResponse:
+async def get_stats(
+    request: Request,
+    include_simulations: bool = Query(default=False, description="Include SIMULATION runs in production metrics"),
+) -> JSONResponse:
     """
-    Returns aggregated statistics across all stored assessments.
-    Used by the dashboard header KPI strip.
+    Returns aggregated statistics across stored live assessments.
     """
     col = _get_collection(request)
     try:
+        match_stage: dict = {}
+        if not include_simulations:
+            match_stage["source"] = {"$ne": "SIMULATION"}
+
         pipeline = [
+            {"$match": match_stage},
             {
                 "$group": {
                     "_id": "$risk_level",
                     "count": {"$sum": 1},
                     "avg_score": {"$avg": "$risk_score"},
                 }
-            }
+            },
         ]
         cursor = col.aggregate(pipeline)
         raw = await cursor.to_list(length=100)
@@ -96,6 +103,7 @@ async def get_stats(request: Request) -> JSONResponse:
             "total_assessments": total_count,
             "by_decision": totals,
             "avg_scores_by_decision": avg_scores,
+            "include_simulations": include_simulations,
         })
     except Exception as exc:
         logger.error("Stats aggregation failed: %s", exc)
@@ -117,10 +125,11 @@ async def list_assessments(
     skip: int = Query(default=0, ge=0, description="Pagination offset"),
     repo: str | None = Query(default=None, description="Filter by repo (e.g. acme/payment-service)"),
     decision: str | None = Query(default=None, description="Filter by decision: PASS, WARN, BLOCK"),
+    source: str | None = Query(default=None, description="Filter by source: GITHUB_WEBHOOK, MANUAL_SCAN, SIMULATION"),
+    include_simulations: bool = Query(default=False, description="Include SIMULATION runs when source not specified"),
 ) -> JSONResponse:
     """
     Paginated list of risk assessments from MongoDB, sorted by creation time.
-    Used by the dashboard 'History' view.
     """
     col = _get_collection(request)
     try:
@@ -129,6 +138,10 @@ async def list_assessments(
             query["repo_full_name"] = repo
         if decision:
             query["risk_level"] = decision.upper()
+        if source:
+            query["source"] = source.upper()
+        elif not include_simulations:
+            query["source"] = {"$ne": "SIMULATION"}
 
         cursor = col.find(query, {"_id": 0}).sort("created_at", -1).skip(skip).limit(limit)
         docs = await cursor.to_list(length=limit)

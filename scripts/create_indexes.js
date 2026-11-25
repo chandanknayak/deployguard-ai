@@ -24,9 +24,18 @@ db.code_graph.createIndex({ "status": 1 }, { name: "idx_status" });
 // ------------------------------------------------------------------
 print("Creating indexes on 'risk_assessments'...");
 db.risk_assessments.createIndex({ "assessment_id": 1 }, { unique: true, name: "idx_assessment_id_unique" });
-db.risk_assessments.createIndex({ "repo_full_name": 1, "pr_number": 1 }, { name: "idx_repo_pr" });
+db.risk_assessments.createIndex({ "repo_full_name": 1, "pr_number": 1, "created_at": -1 }, { name: "idx_repo_pr_time" });
+db.risk_assessments.createIndex({ "source": 1, "created_at": -1 }, { name: "idx_source_time" });
+db.risk_assessments.createIndex({ "owner_email": 1, "created_at": -1 }, { name: "idx_owner_time" });
 db.risk_assessments.createIndex({ "risk_level": 1 }, { name: "idx_risk_level" });
 db.risk_assessments.createIndex({ "created_at": -1 }, { name: "idx_created_at" });
+
+print("Creating indexes on 'users', 'audit_log', 'deployments', and 'enterprise_policy'...");
+db.users.createIndex({ "email": 1 }, { unique: true, name: "idx_user_email_unique" });
+db.enterprise_policy.createIndex({ "owner_email": 1 }, { name: "idx_policy_owner" });
+db.audit_log.createIndex({ "owner_email": 1, "timestamp": -1 }, { name: "idx_audit_owner_time" });
+db.audit_log.createIndex({ "repo": 1, "timestamp": -1 }, { name: "idx_audit_repo_time" });
+db.deployments.createIndex({ "owner_email": 1, "timestamp": -1 }, { name: "idx_deploy_owner_time" });
 
 // ------------------------------------------------------------------
 // 3. incidents Collection Indexes (for metadata + vector search)

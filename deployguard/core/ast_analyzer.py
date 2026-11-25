@@ -527,3 +527,376 @@ def analyze_file(
     """
     return ASTAnalyzer().analyze(source_code, filename, modified_lines)
 
+
+# ---------------------------------------------------------------------------
+# Cross-file AST structural diff & dependency graph extraction
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class SymbolSignature:
+    """Normalized structural signature of a Python symbol for compatibility diffing."""
+
+    qualified_name: str
+    name: str
+    kind: SymbolKind
+    pos_args: list[str]
+    required_pos_count: int
+    required_kwonly: list[str]
+    optional_kwonly: list[str]
+    has_vararg: bool
+    has_kwarg: bool
+    route_path: str | None = None
+    http_methods: list[str] = field(default_factory=list)
+    start_line: int = 1
+
+
+def _extract_symbol_signatures(source_code: str, filename: str) -> dict[str, SymbolSignature]:
+    """Parse source code and return a map of qualified_name -> SymbolSignature."""
+    if not source_code or not source_code.strip():
+        return {}
+    try:
+        tree = ast.parse(source_code, filename=filename, type_comments=False)
+    except SyntaxError:
+        return {}
+
+    signatures: dict[str, SymbolSignature] = {}
+    ns_stack: list[str] = []
+    helper = _SymbolVisitor(filename=filename, modified_lines=set())
+
+    def visit_node(node: ast.AST) -> None:
+        if isinstance(node, ast.ClassDef):
+            qname = ".".join([*ns_stack, node.name])
+            signatures[qname] = SymbolSignature(
+                qualified_name=qname,
+                name=node.name,
+                kind=SymbolKind.CLASS,
+                pos_args=[],
+                required_pos_count=0,
+                required_kwonly=[],
+                optional_kwonly=[],
+                has_vararg=False,
+                has_kwarg=False,
+                start_line=node.lineno,
+            )
+            ns_stack.append(node.name)
+            for child in node.body:
+                visit_node(child)
+            ns_stack.pop()
+            return
+
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            qname = ".".join([*ns_stack, node.name])
+            route_info = helper._detect_route(node)
+            in_class = bool(ns_stack)
+            if route_info["is_fastapi"]:
+                kind = SymbolKind.FASTAPI_ROUTE
+            elif route_info["is_flask"]:
+                kind = SymbolKind.FLASK_ROUTE
+            elif in_class and isinstance(node, ast.AsyncFunctionDef):
+                kind = SymbolKind.ASYNC_METHOD
+            elif in_class:
+                kind = SymbolKind.METHOD
+            elif isinstance(node, ast.AsyncFunctionDef):
+                kind = SymbolKind.ASYNC_FUNCTION
+            else:
+                kind = SymbolKind.FUNCTION
+
+            args = node.args
+            all_pos = [a.arg for a in getattr(args, "posonlyargs", [])] + [a.arg for a in args.args]
+            # Strip self/cls for methods so instance signature comparisons remain clean
+            if in_class and all_pos and all_pos[0] in ("self", "cls"):
+                all_pos_cmp = all_pos[1:]
+                # Adjust total defaults relative to non-self args
+                req_pos = max(0, len(all_pos) - len(args.defaults) - 1)
+            else:
+                all_pos_cmp = all_pos
+                req_pos = max(0, len(all_pos) - len(args.defaults))
+
+            req_kw: list[str] = []
+            opt_kw: list[str] = []
+            for kw_arg, kw_def in zip(args.kwonlyargs, args.kw_defaults):
+                if kw_def is None:
+                    req_kw.append(kw_arg.arg)
+                else:
+                    opt_kw.append(kw_arg.arg)
+
+            signatures[qname] = SymbolSignature(
+                qualified_name=qname,
+                name=node.name,
+                kind=kind,
+                pos_args=all_pos_cmp,
+                required_pos_count=req_pos,
+                required_kwonly=req_kw,
+                optional_kwonly=opt_kw,
+                has_vararg=args.vararg is not None,
+                has_kwarg=args.kwarg is not None,
+                route_path=route_info.get("route_path"),
+                http_methods=route_info.get("http_methods", []),
+                start_line=node.lineno,
+            )
+
+            ns_stack.append(node.name)
+            for child in node.body:
+                visit_node(child)
+            ns_stack.pop()
+            return
+
+        if isinstance(node, ast.Module):
+            for child in node.body:
+                visit_node(child)
+
+    visit_node(tree)
+    return signatures
+
+
+def _is_public_symbol(sig: SymbolSignature) -> bool:
+    """Return True for public symbols or __init__ constructors."""
+    if sig.route_path is not None:
+        return True
+    leaf = sig.name
+    if leaf == "__init__":
+        return True
+    return not leaf.startswith("_")
+
+
+def compare_ast_versions(
+    base_source: str | None,
+    head_source: str | None,
+    filename: str,
+) -> dict:
+    """
+    Compare base and head Python source files to detect breaking structural changes.
+
+    Detects:
+      - ``REMOVED_ROUTE``: An API endpoint handler was deleted or its route/method changed.
+      - ``REMOVED_SYMBOL``: A public function, class, or method was removed.
+      - ``BREAKING_SIGNATURE``: Existing callers can fail due to renamed/removed parameters
+        or newly required parameters without defaults.
+    """
+    if not base_source:
+        return {"breaking_changes": [], "added_symbols": [], "has_breaking_changes": False}
+
+    base_sigs = _extract_symbol_signatures(base_source, filename)
+    head_sigs = _extract_symbol_signatures(head_source or "", filename) if head_source else {}
+
+    breaking: list[dict] = []
+    added: list[str] = []
+
+    for qname, b_sig in base_sigs.items():
+        if not _is_public_symbol(b_sig):
+            continue
+        h_sig = head_sigs.get(qname)
+        if h_sig is None:
+            is_route = b_sig.route_path is not None
+            breaking.append({
+                "type": "REMOVED_ROUTE" if is_route else "REMOVED_SYMBOL",
+                "file": filename,
+                "symbol": qname,
+                "route": f"{','.join(b_sig.http_methods)} {b_sig.route_path}" if is_route else None,
+                "detail": (
+                    f"Removed API endpoint {','.join(b_sig.http_methods)} {b_sig.route_path} ({qname})"
+                    if is_route
+                    else f"Removed public {b_sig.kind.value} '{qname}'"
+                ),
+                "severity": "HIGH",
+                "line": b_sig.start_line,
+            })
+            continue
+
+        # Check route path or HTTP method breaking modifications
+        if b_sig.route_path is not None:
+            if h_sig.route_path != b_sig.route_path or (
+                set(b_sig.http_methods) - set(h_sig.http_methods or b_sig.http_methods)
+            ):
+                breaking.append({
+                    "type": "MODIFIED_ROUTE_CONTRACT",
+                    "file": filename,
+                    "symbol": qname,
+                    "route": f"{','.join(b_sig.http_methods)} {b_sig.route_path}",
+                    "detail": (
+                        f"Route contract changed on '{qname}': "
+                        f"{','.join(b_sig.http_methods)} {b_sig.route_path} -> "
+                        f"{','.join(h_sig.http_methods)} {h_sig.route_path}"
+                    ),
+                    "severity": "HIGH",
+                    "line": h_sig.start_line,
+                })
+
+        # Check parameter signature breaking compatibility
+        old_pos = b_sig.pos_args
+        new_pos = h_sig.pos_args
+        if len(new_pos) < b_sig.required_pos_count and not h_sig.has_vararg:
+            breaking.append({
+                "type": "BREAKING_SIGNATURE",
+                "file": filename,
+                "symbol": qname,
+                "detail": f"Removed required parameter(s) from '{qname}': {old_pos} -> {new_pos}",
+                "severity": "HIGH",
+                "line": h_sig.start_line,
+            })
+        elif new_pos[: len(old_pos)] != old_pos and not h_sig.has_vararg:
+            breaking.append({
+                "type": "BREAKING_SIGNATURE",
+                "file": filename,
+                "symbol": qname,
+                "detail": f"Changed positional parameter order/names in '{qname}': {old_pos} -> {new_pos}",
+                "severity": "HIGH",
+                "line": h_sig.start_line,
+            })
+        elif h_sig.required_pos_count > b_sig.required_pos_count:
+            breaking.append({
+                "type": "BREAKING_SIGNATURE",
+                "file": filename,
+                "symbol": qname,
+                "detail": (
+                    f"Added required argument without default to '{qname}' "
+                    f"(required args {b_sig.required_pos_count} -> {h_sig.required_pos_count})"
+                ),
+                "severity": "HIGH",
+                "line": h_sig.start_line,
+            })
+        elif set(h_sig.required_kwonly) - set(b_sig.required_kwonly):
+            new_kw = sorted(set(h_sig.required_kwonly) - set(b_sig.required_kwonly))
+            breaking.append({
+                "type": "BREAKING_SIGNATURE",
+                "file": filename,
+                "symbol": qname,
+                "detail": f"Added required keyword-only argument(s) {new_kw} to '{qname}'",
+                "severity": "HIGH",
+                "line": h_sig.start_line,
+            })
+
+    for qname in head_sigs:
+        if qname not in base_sigs:
+            added.append(qname)
+
+    return {
+        "breaking_changes": breaking,
+        "added_symbols": added,
+        "has_breaking_changes": len(breaking) > 0,
+    }
+
+
+def _module_tokens_for_path(filepath: str) -> set[str]:
+    """Convert 'pkg/payments/charge.py' -> {'pkg.payments.charge', 'payments.charge', 'charge'}."""
+    clean = filepath.replace("\\", "/")
+    if clean.endswith(".py"):
+        clean = clean[:-3]
+    parts = [p for p in clean.split("/") if p and p != "__init__"]
+    tokens: set[str] = set()
+    for idx in range(len(parts)):
+        tokens.add(".".join(parts[idx:]))
+    if parts:
+        tokens.add(parts[-1])
+    return tokens
+
+
+def build_cross_file_impact_graph(
+    module_sources: dict[str, str],
+    changed_file_symbols: dict[str, list[str]],
+) -> dict:
+    """
+    Trace imports and symbol calls across Python files to build a dependency graph:
+        Modified File -> Exported Symbol -> Downstream Consumer File / Route
+
+    Args:
+        module_sources: Mapping of ``filepath -> source_code`` for analyzed + sibling files.
+        changed_file_symbols: Mapping of ``modified_filepath -> [symbol_names]``.
+
+    Returns:
+        Dict with ``edges``, ``downstream_consumers``, and ``affected_routes``.
+    """
+    if not module_sources or not changed_file_symbols:
+        return {"edges": [], "downstream_consumers": [], "affected_routes": []}
+
+    # Map bare/qualified exported symbol names to their source file
+    symbol_origin: dict[str, str] = {}
+    file_tokens: dict[str, set[str]] = {}
+    for mod_file, syms in changed_file_symbols.items():
+        file_tokens[mod_file] = _module_tokens_for_path(mod_file)
+        for s in syms:
+            bare = s.split(".")[-1]
+            symbol_origin[bare] = mod_file
+            symbol_origin[s] = mod_file
+
+    edges: list[dict] = []
+    consumers: set[str] = set()
+    affected_routes: list[str] = []
+
+    for consumer_file, src in module_sources.items():
+        if not src or not src.strip():
+            continue
+        try:
+            tree = ast.parse(src, filename=consumer_file, type_comments=False)
+        except SyntaxError:
+            continue
+
+        # Collect imports and symbol references/calls inside consumer_file
+        imported_modules: set[str] = set()
+        imported_names: set[str] = set()
+        referenced_names: set[str] = set()
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    imported_modules.add(alias.name)
+            elif isinstance(node, ast.ImportFrom):
+                if node.module:
+                    imported_modules.add(node.module)
+                for alias in node.names:
+                    imported_names.add(alias.name)
+            elif isinstance(node, ast.Call):
+                if isinstance(node.func, ast.Name):
+                    referenced_names.add(node.func.id)
+                elif isinstance(node.func, ast.Attribute):
+                    referenced_names.add(node.func.attr)
+
+        # Extract any API routes exposed by the consumer file
+        sigs = _extract_symbol_signatures(src, consumer_file)
+        consumer_routes = [
+            f"{','.join(s.http_methods)} {s.route_path}"
+            for s in sigs.values()
+            if s.route_path
+        ]
+
+        # Match against changed files and modified/removed symbols
+        for src_file, syms in changed_file_symbols.items():
+            if consumer_file == src_file:
+                continue
+
+            src_tokens = file_tokens.get(src_file, set())
+            imports_src_module = any(
+                imp in src_tokens or any(imp.endswith(f".{tok}") or tok.endswith(f".{imp}") for tok in src_tokens)
+                for imp in imported_modules
+            )
+
+            matched_syms: list[str] = []
+            for sym in syms:
+                bare = sym.split(".")[-1]
+                if bare in imported_names or (imports_src_module and bare in referenced_names):
+                    matched_syms.append(sym)
+                elif imports_src_module and not syms:
+                    matched_syms.append(src_file.rsplit("/", 1)[-1])
+
+            if not matched_syms and imports_src_module and syms:
+                matched_syms.append(syms[0])
+
+            for m_sym in matched_syms:
+                edge = {
+                    "source_file": src_file,
+                    "symbol": m_sym,
+                    "consumer_file": consumer_file,
+                    "consumer_routes": consumer_routes,
+                }
+                edges.append(edge)
+                consumers.add(consumer_file)
+                affected_routes.extend(consumer_routes)
+
+    return {
+        "edges": edges,
+        "downstream_consumers": sorted(consumers),
+        "affected_routes": sorted(set(affected_routes)),
+    }
+
+

@@ -596,32 +596,46 @@ async def save_risk_assessment(
     """
     Persist a completed risk assessment document to the ``risk_assessments``
     collection for audit logging and trend analysis.
-
-    The assessment document is inserted as-is (the ``assessment_id`` field
-    serves as the natural unique identifier). A MongoDB ``_id`` is auto-
-    generated and returned as a hex string.
-
-    ``created_at`` is stamped server-side so SSE queries can filter on it.
-
-    Args:
-        db_client: Active ``MongoDBClient`` instance.
-        assessment: The serialised ``RiskAssessment`` dict plus pipeline metadata.
-
-    Returns:
-        The inserted document's ``_id`` as a hex string.
-
-    Raises:
-        ``pymongo.errors.DuplicateKeyError``: If an assessment with the same
-            ``assessment_id`` already exists (idempotency guard).
     """
     import datetime
-    assessment["created_at"] = datetime.datetime.utcnow()
+
+    assessment.setdefault("source", "MANUAL_SCAN")
+    assessment.setdefault("status", "COMPLETED")
+    assessment["created_at"] = datetime.datetime.now(datetime.timezone.utc)
     result = await db_client.assessments.insert_one(assessment)
     inserted_id = str(result.inserted_id)
     logger.info(
-        "Risk assessment persisted: assessment_id=%s → _id=%s.",
+        "Risk assessment persisted: assessment_id=%s source=%s -> _id=%s.",
         assessment.get("assessment_id", "?"),
+        assessment.get("source"),
         inserted_id,
     )
     return inserted_id
+
+
+async def ensure_indexes(db_client: MongoDBClient) -> None:
+    """
+    Create idempotent MongoDB indexes at startup so queries on assessments,
+    users, policies, deployments, and audit logs stay fast and multi-tenant safe.
+    """
+    if db_client is None or getattr(db_client, "db", None) is None:
+        return
+
+    index_specs = [
+        (db_client.assessments, [("assessment_id", 1)], {"unique": True, "name": "idx_assessment_id_unique"}),
+        (db_client.assessments, [("repo_full_name", 1), ("pr_number", 1), ("created_at", -1)], {"name": "idx_repo_pr_time"}),
+        (db_client.assessments, [("source", 1), ("created_at", -1)], {"name": "idx_source_time"}),
+        (db_client.assessments, [("owner_email", 1), ("created_at", -1)], {"name": "idx_owner_time"}),
+        (db_client.db["users"], [("email", 1)], {"unique": True, "name": "idx_user_email_unique"}),
+        (db_client.db["enterprise_policy"], [("owner_email", 1)], {"name": "idx_policy_owner"}),
+        (db_client.db["audit_log"], [("owner_email", 1), ("timestamp", -1)], {"name": "idx_audit_owner_time"}),
+        (db_client.db["audit_log"], [("repo", 1), ("timestamp", -1)], {"name": "idx_audit_repo_time"}),
+        (db_client.db["deployments"], [("owner_email", 1), ("timestamp", -1)], {"name": "idx_deploy_owner_time"}),
+    ]
+
+    for col, keys, kwargs in index_specs:
+        try:
+            await col.create_index(keys, **kwargs)
+        except Exception as exc:
+            logger.debug("Skipping index %s: %s", kwargs.get("name"), exc)
 

@@ -90,12 +90,32 @@ class Settings(BaseSettings):
     )
 
     # ------------------------------------------------------------------
-    # Security
+    # Security & Hosting
     # ------------------------------------------------------------------
     max_payload_size_bytes: int = Field(
         default=10 * 1024 * 1024,  # 10 MB
         description="Maximum accepted webhook payload size in bytes.",
         ge=1024,
+    )
+    allowed_hosts: list[str] = Field(
+        default=["*"],
+        description="Trusted hosts allowed by TrustedHostMiddleware.",
+    )
+    enable_docs: bool = Field(
+        default=True,
+        description="Expose interactive OpenAPI /docs and /redoc endpoints.",
+    )
+    public_url: str = Field(
+        default="https://deployguard-ai.onrender.com",
+        description="Public base URL used for OAuth callbacks and GitHub check target links.",
+    )
+    jwt_secret_key: SecretStr = Field(
+        default=SecretStr("deployguard-secret-change-in-prod-32chars"),
+        description="HMAC secret key used to sign user session JWT tokens.",
+    )
+    token_encryption_key: SecretStr = Field(
+        default=SecretStr(""),
+        description="Optional encryption secret for GitHub tokens stored in MongoDB.",
     )
 
     # ------------------------------------------------------------------
@@ -183,25 +203,21 @@ class Settings(BaseSettings):
         le=1.0,
     )
 
-    # ------------------------------------------------------------------
-    # Diff / AST Analysis
-    # ------------------------------------------------------------------
-    max_diff_files: int = Field(
-        default=200,
-        description="Maximum number of changed files to process per PR.",
-        ge=1,
-    )
-    supported_ast_languages: list[str] = Field(
-        default=["python"],
-        description="File extensions (without dot) eligible for AST analysis.",
-    )
-
-    @field_validator("supported_ast_languages", mode="before")
+    @field_validator("supported_ast_languages", "allowed_hosts", mode="before")
     @classmethod
     def _parse_languages(cls, v: str | list[str]) -> list[str]:
         """Allow comma-separated string or JSON list from env."""
         if isinstance(v, str):
-            return [lang.strip().lower() for lang in v.split(",") if lang.strip()]
+            stripped = v.strip()
+            if stripped.startswith("["):
+                import json
+                try:
+                    parsed = json.loads(stripped)
+                    if isinstance(parsed, list):
+                        return [str(x).strip().lower() for x in parsed if str(x).strip()]
+                except Exception:
+                    pass
+            return [lang.strip().lower() for lang in stripped.split(",") if lang.strip()]
         return [lang.lower() for lang in v]
 
 

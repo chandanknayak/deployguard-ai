@@ -52,6 +52,7 @@ from deployguard.api.routers import auth as auth_router
 from deployguard.api.routers import repos as repos_router
 from deployguard.config import settings
 from deployguard.db.client import MongoDBClient
+from deployguard.db.db_operations import ensure_indexes
 
 logger = logging.getLogger(__name__)
 
@@ -133,15 +134,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Initialize MongoDB client
     try:
         app.state.db = await MongoDBClient.create()
+        await ensure_indexes(app.state.db)
     except Exception as exc:
         logger.warning("Could not establish initial MongoDB connection: %s. Continuing in degraded mode.", exc)
         app.state.db = None
 
-    # Initialize RiskAssessmentAgent
+    # Initialize RiskAssessmentAgent (gracefully skipped if openai package or key unavailable)
     try:
         app.state.agent = RiskAssessmentAgent()
     except Exception as exc:
-        logger.warning("Could not initialize RiskAssessmentAgent: %s. Continuing in degraded mode.", exc)
+        logger.info("RiskAssessmentAgent disabled (%s). Deterministic 40/30/20/10 engine active.", exc)
         app.state.agent = None
 
     yield  # Application runs here
@@ -177,9 +179,9 @@ def create_app() -> FastAPI:
             "Webhook ingestion layer and deterministic AST analysis engine."
         ),
         version="1.0.0",
-        docs_url="/docs" if settings.app_env != "production" else None,
-        redoc_url="/redoc" if settings.app_env != "production" else None,
-        openapi_url="/openapi.json" if settings.app_env != "production" else None,
+        docs_url="/docs" if settings.enable_docs else None,
+        redoc_url="/redoc" if settings.enable_docs else None,
+        openapi_url="/openapi.json" if settings.enable_docs else None,
         lifespan=lifespan,
     )
 
@@ -190,20 +192,20 @@ def create_app() -> FastAPI:
     # GZip compression for responses larger than 1KB
     app.add_middleware(GZipMiddleware, minimum_size=1024)
 
-    # CORS — allow the Streamlit dashboard (and any frontend) to call the API
+    # CORS — allow dashboard/frontends to call the API
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],          # Tighten to specific domains in production
+        allow_origins=["*"],
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
 
-    # Trusted Host enforcement (add your actual hostnames in production)
-    if settings.app_env == "production":
+    # Trusted Host enforcement (configurable via ALLOWED_HOSTS env var)
+    if settings.allowed_hosts and "*" not in settings.allowed_hosts:
         app.add_middleware(
             TrustedHostMiddleware,
-            allowed_hosts=["deployguard.yourdomain.com"],  # Configure per deployment
+            allowed_hosts=settings.allowed_hosts,
         )
 
     # Request/response structured logging
