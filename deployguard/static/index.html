@@ -547,23 +547,40 @@
   <script>
     const API_BASE = window.location.origin;
 
-    const FALLBACK_PRS = [
+    const DEMO_SAMPLE_PRS = [
       {
-        pr_number: 1,
-        title: "feat(core): Add async exponential backoff retry utility",
-        author: "chandanknayak",
-        branch: "feat-retry",
+        pr_number: 101,
+        title: "feat(retry): Add exponential backoff to webhook client",
+        author: "alex-dev",
+        branch: "feat/retry-backoff",
         base_branch: "main",
-        additions: 124,
-        deletions: 8,
-        changed_files: 3,
+        additions: 64,
+        deletions: 4,
+        changed_files: 2,
         risk_level: "PASS",
-        risk_score: 18,
+        risk_score: 16,
         decision: "PASS",
-        blast_radius: { affected_services: ["deployguard-ai", "notification-service"], max_sla_tier: "P1", total_downstream: 2 },
+        blast_radius: { affected_services: ["payments-api", "notification-worker"], max_sla_tier: "P1", total_downstream: 2 },
         ast_summary: { breaking_changes: 0, schema_changes: false },
-        plain_explanation: "Zero breaking changes. Pure additive retry utility with test coverage. Safe to merge.",
-        rationale: "Additive enhancement with zero breaking public API signatures or database schema changes."
+        plain_explanation: "Additive utility with unit tests. Zero breaking API changes. Safe to merge.",
+        rationale: "No public function signatures modified or deleted."
+      },
+      {
+        pr_number: 102,
+        title: "refactor(billing): Remove legacy charge_v1 endpoint",
+        author: "sam-backend",
+        branch: "cleanup/drop-v1",
+        base_branch: "main",
+        additions: 12,
+        deletions: 210,
+        changed_files: 5,
+        risk_level: "BLOCK",
+        risk_score: 86,
+        decision: "BLOCK",
+        blast_radius: { affected_services: ["payments-api", "checkout-service", "invoice-worker"], max_sla_tier: "P0", total_downstream: 3 },
+        ast_summary: { breaking_changes: 3, schema_changes: true },
+        plain_explanation: "Deletes charge_v1 which checkout-service still calls. Merging will break P0 checkout.",
+        rationale: "3 breaking API removals affecting P0 downstream service."
       }
     ];
 
@@ -571,8 +588,8 @@
       token: localStorage.getItem("deployguard_token") || null,
       user: JSON.parse(localStorage.getItem("deployguard_user") || "null"),
       isDemoSession: false,
-      repos: [{ name: "chandanknayak/deployguard-ai", sla: "P0", desc: "Primary Guarded Repository" }],
-      activeRepo: "chandanknayak/deployguard-ai",
+      repos: [],
+      activeRepo: "",
       prs: [],
       selectedPRIndex: 0,
       availableGitHubRepos: []
@@ -692,6 +709,10 @@
       STATE.token = null;
       STATE.user = null;
       STATE.isDemoSession = false;
+      STATE.repos = [];
+      STATE.activeRepo = "";
+      STATE.prs = [];
+      STATE.availableGitHubRepos = [];
       localStorage.removeItem("deployguard_token");
       localStorage.removeItem("deployguard_user");
       showAuthScreen();
@@ -704,9 +725,11 @@
       document.getElementById("header-company-name").innerText = comp;
       document.getElementById("user-nav-email").innerText = u.email;
       document.getElementById("user-initials-badge").innerText = comp.slice(0, 2).toUpperCase();
-      document.getElementById("header-github-badge").innerText = u.github_connected
-        ? `GitHub: @${u.github_username}`
-        : "GitHub: Public Mode";
+      document.getElementById("header-github-badge").innerText = STATE.isDemoSession
+        ? "Demo Mode (1 sample repo)"
+        : u.github_connected
+          ? `GitHub: @${u.github_username}`
+          : "GitHub not linked — click Link GitHub";
     }
 
     async function checkCloudHealth() {
@@ -786,6 +809,14 @@
     }
 
     async function loadRepositories() {
+      STATE.repos = [];
+      STATE.activeRepo = "";
+      if (STATE.isDemoSession) {
+        STATE.repos = [{ name: "demo-org/payments-api", sla: "P0", desc: "Sample payment microservice (Demo Workspace)" }];
+        STATE.activeRepo = "demo-org/payments-api";
+        populateRepoSelectors();
+        return;
+      }
       try {
         if (STATE.token) {
           const r = await fetch(`${API_BASE}/repos`, { headers: authHeaders() });
@@ -800,22 +831,14 @@
               STATE.activeRepo = STATE.repos[0].name;
             }
           }
-          const avail = await fetch(`${API_BASE}/repos/available`, { headers: authHeaders() });
-          if (avail.ok) {
-            const ad = await avail.json();
-            STATE.availableGitHubRepos = ad.repos || [];
-            populateAvailableReposPicker();
-          }
-        }
-        const ent = await fetch(`${API_BASE}/enterprise/repos`);
-        if (ent.ok) {
-          const ed = await ent.json();
-          const existing = new Set(STATE.repos.map(r => r.name));
-          (ed.repositories || []).forEach(r => {
-            if (!existing.has(r.full_name)) {
-              STATE.repos.push({ name: r.full_name, sla: "P0", desc: r.description || "GitHub Repository" });
+          if (STATE.user?.github_connected) {
+            const avail = await fetch(`${API_BASE}/repos/available`, { headers: authHeaders() });
+            if (avail.ok) {
+              const ad = await avail.json();
+              STATE.availableGitHubRepos = ad.repos || [];
+              populateAvailableReposPicker();
             }
-          });
+          }
         }
       } catch {}
       populateRepoSelectors();
@@ -824,19 +847,39 @@
     function populateRepoSelectors() {
       const sel = document.getElementById("active-repo-select");
       sel.innerHTML = "";
-      STATE.repos.forEach(r => {
+      if (!STATE.repos.length) {
         const opt = document.createElement("option");
-        opt.value = r.name;
-        opt.innerText = `${r.name} [${r.sla}]`;
-        if (r.name === STATE.activeRepo) opt.selected = true;
+        opt.value = "";
+        opt.innerText = "No repository linked yet";
         sel.appendChild(opt);
-      });
+      } else {
+        STATE.repos.forEach(r => {
+          const opt = document.createElement("option");
+          opt.value = r.name;
+          opt.innerText = `${r.name} [${r.sla}]`;
+          if (r.name === STATE.activeRepo) opt.selected = true;
+          sel.appendChild(opt);
+        });
+      }
       renderRepoGrid();
     }
 
     function renderRepoGrid() {
       const grid = document.getElementById("repo-cards-grid");
       if (!grid) return;
+      if (!STATE.repos.length) {
+        grid.innerHTML = `
+          <div class="col-span-full p-8 rounded-xl bg-slate-50 border border-dashed border-slate-300 text-center space-y-3">
+            <p class="text-sm font-bold text-slate-800">No GitHub repository linked to this account yet</p>
+            <p class="text-xs text-slate-500 max-w-md mx-auto">Link your own GitHub account using a Personal Access Token, then select any of your repositories to scan PRs.</p>
+            <div class="flex justify-center space-x-2 pt-1">
+              <button onclick="openConnectGitHubModal()" class="px-4 py-2 rounded-lg text-xs font-semibold bg-slate-900 hover:bg-slate-800 text-white">Link GitHub PAT</button>
+              <button onclick="openAddRepoModal()" class="px-4 py-2 rounded-lg text-xs font-semibold bg-indigo-600 hover:bg-indigo-700 text-white">+ Add Repo</button>
+            </div>
+          </div>
+        `;
+        return;
+      }
       grid.innerHTML = STATE.repos.map(r => `
         <div class="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-2.5">
           <div class="flex items-center justify-between gap-2">
@@ -898,25 +941,41 @@
     }
 
     async function loadPullRequests() {
+      if (STATE.isDemoSession) {
+        STATE.prs = [...DEMO_SAMPLE_PRS];
+        STATE.selectedPRIndex = 0;
+        document.getElementById("pr-queue-status").innerText = "Demo Sample";
+        renderPRCards();
+        renderPRDetails();
+        return;
+      }
+
+      if (!STATE.activeRepo || !STATE.activeRepo.includes("/")) {
+        STATE.prs = [];
+        STATE.selectedPRIndex = 0;
+        document.getElementById("pr-queue-status").innerText = "Link a repo";
+        renderPRCards();
+        renderPRDetails();
+        return;
+      }
+
       const [owner, repo] = STATE.activeRepo.split("/");
       document.getElementById("pr-queue-status").innerText = "Syncing...";
       let loaded = [];
 
       try {
-        const url = (STATE.token && STATE.user?.github_connected)
-          ? `${API_BASE}/repos/${owner}/${repo}/pulls`
-          : `${API_BASE}/enterprise/repos/${owner}/${repo}/pulls`;
-
-        const r = await fetch(url, { headers: authHeaders() });
-        if (r.ok) {
-          const d = await r.json();
-          loaded = (d.pulls || []).map(normalizePR);
+        if (STATE.token && STATE.user?.github_connected) {
+          const r = await fetch(`${API_BASE}/repos/${owner}/${repo}/pulls`, { headers: authHeaders() });
+          if (r.ok) {
+            const d = await r.json();
+            loaded = (d.pulls || []).map(normalizePR);
+          }
         }
       } catch {}
 
       if (loaded.length === 0) {
         try {
-          const ar = await fetch(`${API_BASE}/assessments/?limit=15`);
+          const ar = await fetch(`${API_BASE}/assessments/?limit=15&repo=${encodeURIComponent(STATE.activeRepo)}`);
           if (ar.ok) {
             const ad = await ar.json();
             loaded = (ad.results || []).map(doc => {
@@ -950,9 +1009,9 @@
         } catch {}
       }
 
-      STATE.prs = loaded.length ? loaded : FALLBACK_PRS;
+      STATE.prs = loaded;
       STATE.selectedPRIndex = 0;
-      document.getElementById("pr-queue-status").innerText = loaded.length ? "Live" : "Demo";
+      document.getElementById("pr-queue-status").innerText = loaded.length ? "Live" : "No open PRs";
       renderPRCards();
       renderPRDetails();
     }
@@ -1032,7 +1091,24 @@
     function renderPRDetails() {
       const pr = STATE.prs[STATE.selectedPRIndex] || STATE.prs[0];
       const container = document.getElementById("pr-detail-deck");
-      if (!pr) return;
+      if (!pr) {
+        container.innerHTML = `
+          <div class="py-12 px-4 text-center space-y-3">
+            <div class="w-12 h-12 mx-auto rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center text-xl">🔗</div>
+            <h3 class="text-base font-bold text-slate-900">${STATE.activeRepo ? 'No open pull requests in ' + STATE.activeRepo : 'Connect your GitHub to get started'}</h3>
+            <p class="text-xs text-slate-500 max-w-md mx-auto">
+              ${STATE.activeRepo
+                ? 'Open a pull request on GitHub or click Simulate PR to test the safety guard.'
+                : 'Link your GitHub Personal Access Token so you can import your own repositories and check every pull request before merging.'}
+            </p>
+            <div class="flex justify-center space-x-2 pt-2">
+              <button onclick="openConnectGitHubModal()" class="px-4 py-2 rounded-lg text-xs font-semibold bg-slate-900 hover:bg-slate-800 text-white">Link GitHub</button>
+              <button onclick="openAddRepoModal()" class="px-4 py-2 rounded-lg text-xs font-semibold bg-indigo-600 hover:bg-indigo-700 text-white">+ Add Repo</button>
+            </div>
+          </div>
+        `;
+        return;
+      }
 
       const badgeCls = pr.risk_level === "PASS" ? "badge-pass"
         : pr.risk_level === "WARN" ? "badge-warn"
