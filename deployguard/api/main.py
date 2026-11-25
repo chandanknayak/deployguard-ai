@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import logging
 import time
+import uuid
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
@@ -76,19 +77,29 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         start = time.monotonic()
+        request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
         delivery_id = request.headers.get("X-GitHub-Delivery", "-")
 
         response = await call_next(request)
 
         duration_ms = (time.monotonic() - start) * 1000
         logger.info(
-            "method=%s path=%s status=%d duration=%.1fms delivery=%s",
+            "method=%s path=%s status=%d duration=%.1fms delivery=%s request_id=%s",
             request.method,
             request.url.path,
             response.status_code,
             duration_ms,
             delivery_id,
+            request_id,
         )
+        response.headers["X-Request-ID"] = request_id
+        if "X-Content-Type-Options" not in response.headers:
+            response.headers["X-Content-Type-Options"] = "nosniff"
+        if "X-Frame-Options" not in response.headers:
+            response.headers["X-Frame-Options"] = "DENY"
+        if "Referrer-Policy" not in response.headers:
+            response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+
         return response
 
 
