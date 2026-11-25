@@ -98,6 +98,31 @@ async def list_repos(current_user: Annotated[dict, Depends(get_current_user)]):
     return {"repos": current_user.get("connected_repos", [])}
 
 
+@router.get("/available", summary="List user's GitHub repositories available to connect")
+async def list_available_github_repos(current_user: Annotated[dict, Depends(get_current_user)]):
+    gh_token = current_user.get("github_access_token")
+    if not gh_token:
+        return {"repos": [], "github_connected": False}
+    try:
+        items = await _gh_get("https://api.github.com/user/repos?sort=updated&per_page=30", gh_token)
+        return {
+            "github_connected": True,
+            "repos": [
+                {
+                    "full_name": rp["full_name"],
+                    "owner": rp["owner"]["login"],
+                    "repo": rp["name"],
+                    "private": rp.get("private", False),
+                    "description": rp.get("description") or "",
+                    "language": rp.get("language") or "",
+                }
+                for rp in items
+            ],
+        }
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"GitHub API error: {e}")
+
+
 @router.post("/connect", summary="Connect a GitHub repository")
 async def connect_repo(
     body: ConnectRepoRequest,

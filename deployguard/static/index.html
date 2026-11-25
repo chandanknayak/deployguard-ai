@@ -6,7 +6,7 @@
   <title>DeployGuard AI · Enterprise Release Risk & Change-Impact Platform</title>
   <meta name="description" content="Enterprise-grade release governance, AST code impact analysis, microservice blast radius protection, and automated PR merge gates.">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220%22 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🛡️</text></svg>">
-  
+
   <!-- Tailwind CSS -->
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
@@ -40,7 +40,7 @@
     }
   </script>
 
-  <!-- Typography & Icons -->
+  <!-- Typography & Vis.js -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -51,50 +51,30 @@
       font-family: 'Inter', sans-serif;
       background-color: #070a11;
       color: #f1f5f9;
-      background-image: 
+      background-image:
         radial-gradient(circle at 50% 0%, rgba(99, 102, 241, 0.12) 0%, transparent 50%),
         radial-gradient(circle at 90% 20%, rgba(139, 92, 246, 0.08) 0%, transparent 40%);
       background-attachment: fixed;
     }
     code, pre, .font-mono { font-family: 'JetBrains Mono', monospace; }
 
-    /* Frosted glass effects */
     .glass-panel {
-      background: rgba(13, 19, 31, 0.75);
+      background: rgba(13, 19, 31, 0.78);
       backdrop-filter: blur(16px);
       -webkit-backdrop-filter: blur(16px);
       border: 1px solid rgba(255, 255, 255, 0.07);
     }
-    .glass-panel-hover:hover {
-      border-color: rgba(99, 102, 241, 0.35);
-      background: rgba(17, 25, 40, 0.85);
-    }
+    .badge-pass { background: rgba(16, 185, 129, 0.12); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.28); }
+    .badge-warn { background: rgba(245, 158, 11, 0.12); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.28); }
+    .badge-block { background: rgba(239, 68, 68, 0.12); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.28); }
+    .badge-pending { background: rgba(99, 102, 241, 0.12); color: #a5b4fc; border: 1px solid rgba(99, 102, 241, 0.28); }
 
-    /* Decision badges */
-    .badge-pass {
-      background: rgba(16, 185, 129, 0.12);
-      color: #34d399;
-      border: 1px solid rgba(16, 185, 129, 0.28);
-    }
-    .badge-warn {
-      background: rgba(245, 158, 11, 0.12);
-      color: #fbbf24;
-      border: 1px solid rgba(245, 158, 11, 0.28);
-    }
-    .badge-block {
-      background: rgba(239, 68, 68, 0.12);
-      color: #f87171;
-      border: 1px solid rgba(239, 68, 68, 0.28);
-    }
-
-    /* Pulse animation */
     @keyframes subtle-pulse {
       0%, 100% { opacity: 1; transform: scale(1); }
       50% { opacity: 0.6; transform: scale(0.96); }
     }
     .status-pulse { animation: subtle-pulse 2.2s infinite ease-in-out; }
 
-    /* Custom scrollbar */
     ::-webkit-scrollbar { width: 6px; height: 6px; }
     ::-webkit-scrollbar-track { background: #070a11; }
     ::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 999px; }
@@ -104,18 +84,14 @@
 <body class="min-h-screen flex flex-col antialiased selection:bg-indigo-600 selection:text-white">
 
   <!-- ===================================================================== -->
-  <!-- VIEW 1: AUTHENTICATION / ONBOARDING SCREEN (Shows if logged out) -->
+  <!-- VIEW 1: ENTERPRISE AUTHENTICATION SCREEN -->
   <!-- ===================================================================== -->
   <div id="auth-screen" class="hidden min-h-screen flex flex-col items-center justify-center p-4 relative z-50">
     <div class="absolute inset-0 bg-space-950/90 backdrop-blur-2xl -z-10"></div>
-    
-    <!-- Ambient Glow -->
     <div class="w-96 h-96 bg-indigo-600/20 rounded-full blur-3xl absolute -top-10 -left-10 pointer-events-none"></div>
     <div class="w-96 h-96 bg-purple-600/15 rounded-full blur-3xl absolute -bottom-10 -right-10 pointer-events-none"></div>
 
     <div class="max-w-md w-full glass-panel rounded-3xl p-8 shadow-2xl border border-white/10 space-y-6">
-      
-      <!-- Brand Header -->
       <div class="text-center space-y-2">
         <div class="w-14 h-14 mx-auto rounded-2xl bg-gradient-to-tr from-indigo-600 via-indigo-500 to-violet-500 flex items-center justify-center shadow-xl shadow-indigo-500/25 border border-indigo-400/30">
           <span class="text-2xl">🛡️</span>
@@ -124,7 +100,6 @@
         <p class="text-xs text-slate-400">Enterprise Release Risk & Change-Impact Platform</p>
       </div>
 
-      <!-- Auth Switcher Tabs -->
       <div class="flex p-1 rounded-xl bg-space-900 border border-slate-800 text-xs">
         <button id="auth-tab-login" onclick="setAuthMode('login')" class="flex-1 py-2 rounded-lg font-semibold transition bg-indigo-600 text-white shadow">
           Sign In
@@ -134,8 +109,14 @@
         </button>
       </div>
 
-      <!-- Form -->
+      <div id="auth-error-box" class="hidden p-3 rounded-xl bg-rose-950/50 border border-rose-500/40 text-xs text-rose-300"></div>
+
       <form id="auth-form" onsubmit="handleAuthSubmit(event)" class="space-y-4">
+        <div id="field-fullname" class="hidden space-y-1">
+          <label class="text-xs font-semibold text-slate-300">Full Name</label>
+          <input type="text" id="auth-fullname" placeholder="e.g. Chandan Nayak" class="w-full bg-space-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500">
+        </div>
+
         <div id="field-company" class="hidden space-y-1">
           <label class="text-xs font-semibold text-slate-300">Company / Organization Name</label>
           <input type="text" id="auth-company" placeholder="e.g. Acme Global, Razorpay, Swiggy" class="w-full bg-space-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500">
@@ -143,22 +124,12 @@
 
         <div class="space-y-1">
           <label class="text-xs font-semibold text-slate-300">Work Email</label>
-          <input type="email" id="auth-email" required placeholder="alex@company.com" value="lead@enterprise.com" class="w-full bg-space-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500">
+          <input type="email" id="auth-email" required placeholder="lead@company.com" class="w-full bg-space-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500">
         </div>
 
         <div class="space-y-1">
-          <label class="text-xs font-semibold text-slate-300">Password</label>
-          <input type="password" id="auth-password" required placeholder="••••••••••••" value="DeployGuard2026!" class="w-full bg-space-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500">
-        </div>
-
-        <div id="field-role" class="hidden space-y-1">
-          <label class="text-xs font-semibold text-slate-300">Your Engineering Role</label>
-          <select id="auth-role" class="w-full bg-space-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-indigo-500">
-            <option value="Tech Lead / Release Engineer">Tech Lead / Release Engineer</option>
-            <option value="VP / Director of Engineering">VP / Director of Engineering</option>
-            <option value="DevOps / Platform Architect">DevOps / Platform Architect</option>
-            <option value="Security & Compliance Auditor">Security & Compliance Auditor</option>
-          </select>
+          <label class="text-xs font-semibold text-slate-300">Password <span class="text-slate-500 font-normal">(min 8 chars)</span></label>
+          <input type="password" id="auth-password" required minlength="8" placeholder="••••••••••••" class="w-full bg-space-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500">
         </div>
 
         <button type="submit" id="auth-submit-btn" class="w-full py-3 rounded-xl font-bold text-xs bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-600/25 transition">
@@ -166,27 +137,24 @@
         </button>
       </form>
 
-      <!-- Instant Preview Helper -->
       <div class="pt-3 border-t border-slate-800 text-center space-y-2">
-        <p class="text-[11px] text-slate-400">Want to explore without typing credentials?</p>
+        <p class="text-[11px] text-slate-400">Want to explore live PRs immediately?</p>
         <button onclick="quickDemoLogin()" class="w-full py-2.5 px-4 rounded-xl text-xs font-semibold bg-space-850 hover:bg-space-800 border border-indigo-500/30 text-indigo-300 transition flex items-center justify-center space-x-2">
-          <span>⚡ One-Click Enterprise Demo Access</span>
+          <span>⚡ One-Click Live Workspace Access</span>
         </button>
       </div>
-
     </div>
   </div>
 
   <!-- ===================================================================== -->
-  <!-- VIEW 2: MAIN ENTERPRISE PLATFORM (Shows when logged in) -->
+  <!-- VIEW 2: MAIN ENTERPRISE PLATFORM -->
   <!-- ===================================================================== -->
   <div id="app-screen" class="flex-1 flex flex-col">
 
     <!-- Top Navigation Header -->
-    <header class="sticky top-0 z-40 w-full border-b border-white/5 bg-space-950/80 backdrop-blur-xl">
+    <header class="sticky top-0 z-40 w-full border-b border-white/5 bg-space-950/85 backdrop-blur-xl">
       <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-        
-        <!-- Left: Logo & Company Persona -->
+        <!-- Left: Brand -->
         <div class="flex items-center space-x-3.5">
           <div class="w-9 h-9 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-500 flex items-center justify-center shadow-lg shadow-indigo-500/20 border border-indigo-400/30">
             <span class="text-lg">🛡️</span>
@@ -197,9 +165,9 @@
               <span class="text-[10px] font-bold bg-indigo-500/15 text-indigo-400 border border-indigo-500/25 px-2 py-0.5 rounded-full uppercase tracking-wider">Enterprise</span>
             </div>
             <div class="flex items-center space-x-1.5 text-xs text-slate-400">
-              <span id="header-company-name" class="font-semibold text-slate-200">Acme Global Platform</span>
+              <span id="header-company-name" class="font-semibold text-slate-200">DeployGuard Enterprise</span>
               <span class="text-slate-600">•</span>
-              <span id="header-user-role" class="text-indigo-400 text-[11px]">Tech Lead</span>
+              <span id="header-github-badge" class="text-indigo-400 text-[11px]">GitHub Live</span>
             </div>
           </div>
         </div>
@@ -210,86 +178,76 @@
             🏢 PR Command Center
           </button>
           <button onclick="switchTab('blast')" id="nav-btn-blast" class="px-3.5 py-1.5 rounded-lg font-semibold transition text-slate-400 hover:text-white hover:bg-space-800">
-            🕸️ Microservice Blast Radius
+            🕸️ Blast Radius
           </button>
           <button onclick="switchTab('release')" id="nav-btn-release" class="px-3.5 py-1.5 rounded-lg font-semibold transition text-slate-400 hover:text-white hover:bg-space-800">
             🚀 Release Hub
           </button>
           <button onclick="switchTab('repos')" id="nav-btn-repos" class="px-3.5 py-1.5 rounded-lg font-semibold transition text-slate-400 hover:text-white hover:bg-space-800">
-            📦 Connected Repos
+            📦 Repositories
           </button>
           <button onclick="switchTab('policy')" id="nav-btn-policy" class="px-3.5 py-1.5 rounded-lg font-semibold transition text-slate-400 hover:text-white hover:bg-space-800">
-            ⚙️ Governance Policy
+            ⚙️ Governance
           </button>
         </nav>
 
         <!-- Right: Status & User Profile -->
-        <div class="flex items-center space-x-3">
-          <!-- Status pill -->
-          <div class="hidden lg:flex items-center space-x-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-            <span class="w-2 h-2 rounded-full bg-emerald-400 status-pulse"></span>
-            <span id="cloud-status-text">Cloud Engine Active</span>
+        <div class="flex items-center space-x-2.5">
+          <div id="cloud-status-pill" class="hidden lg:flex items-center space-x-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+            <span id="cloud-status-dot" class="w-2 h-2 rounded-full bg-emerald-400 status-pulse"></span>
+            <span id="cloud-status-text">Checking API...</span>
           </div>
 
-          <!-- Account Avatar & Logout -->
+          <button onclick="openConnectGitHubModal()" id="btn-connect-gh" class="hidden sm:flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-space-900 hover:bg-space-800 border border-slate-700 text-slate-200 transition">
+            <span>🔗 Connect GitHub</span>
+          </button>
+
           <div class="flex items-center space-x-2 bg-space-900 border border-slate-800 p-1 pr-2.5 rounded-xl">
             <div id="user-initials-badge" class="w-7 h-7 rounded-lg bg-indigo-600 text-white font-bold text-xs flex items-center justify-center">
-              AG
+              DG
             </div>
-            <span id="user-nav-email" class="text-xs text-slate-300 font-medium hidden sm:inline max-w-[130px] truncate">lead@enterprise.com</span>
-            <button onclick="logout()" title="Sign Out" class="text-slate-400 hover:text-rose-400 text-xs pl-1">
-              ✕
+            <span id="user-nav-email" class="text-xs text-slate-300 font-medium hidden sm:inline max-w-[120px] truncate">Demo Mode</span>
+            <button onclick="openAuthScreen()" title="Sign In / Switch Account" class="text-indigo-400 hover:text-indigo-300 text-[11px] font-semibold pl-1">
+              Account
             </button>
           </div>
         </div>
+      </div>
 
+      <!-- Mobile Tab Bar -->
+      <div class="md:hidden flex overflow-x-auto space-x-1 px-4 pb-2 text-xs">
+        <button onclick="switchTab('prs')" class="px-3 py-1 rounded-lg bg-space-900 text-slate-200 shrink-0">🏢 PRs</button>
+        <button onclick="switchTab('blast')" class="px-3 py-1 rounded-lg bg-space-900 text-slate-200 shrink-0">🕸️ Blast</button>
+        <button onclick="switchTab('release')" class="px-3 py-1 rounded-lg bg-space-900 text-slate-200 shrink-0">🚀 Release</button>
+        <button onclick="switchTab('repos')" class="px-3 py-1 rounded-lg bg-space-900 text-slate-200 shrink-0">📦 Repos</button>
+        <button onclick="switchTab('policy')" class="px-3 py-1 rounded-lg bg-space-900 text-slate-200 shrink-0">⚙️ Policy</button>
       </div>
     </header>
 
-    <!-- Visual Self-Explanatory Pipeline Banner ("How It Works") -->
-    <div class="border-b border-white/5 bg-space-900/40 py-3">
+    <!-- Visual Self-Explanatory Pipeline Banner -->
+    <div class="border-b border-white/5 bg-space-900/40 py-2.5">
       <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-3 text-xs">
-          
-          <div class="flex items-center space-x-2 text-slate-400 shrink-0">
-            <span class="text-indigo-400 font-bold uppercase tracking-wider text-[10px]">Guard Pipeline</span>
-            <span class="text-slate-600">|</span>
-            <span class="text-slate-300">How DeployGuard protects releases in 4 automated steps:</span>
+        <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-2 text-xs">
+          <div class="flex flex-wrap items-center gap-2 text-[11px]">
+            <span class="text-indigo-400 font-bold uppercase tracking-wider text-[10px]">Guard Flow:</span>
+            <span class="px-2 py-0.5 rounded bg-space-950 border border-slate-800 text-slate-300">1. PR Opened</span>
+            <span class="text-slate-600">→</span>
+            <span class="px-2 py-0.5 rounded bg-space-950 border border-indigo-500/40 text-indigo-300">2. AST & Schema Scan</span>
+            <span class="text-slate-600">→</span>
+            <span class="px-2 py-0.5 rounded bg-space-950 border border-purple-500/40 text-purple-300">3. Blast Radius Graph</span>
+            <span class="text-slate-600">→</span>
+            <span class="px-2 py-0.5 rounded bg-space-950 border border-emerald-500/40 text-emerald-300">4. Safe Merge / Block Gate</span>
           </div>
-
-          <div class="flex flex-wrap items-center gap-2 sm:gap-3 text-[11px]">
-            <div class="flex items-center space-x-1.5 px-2.5 py-1 rounded-lg bg-space-950 border border-slate-800 text-slate-300">
-              <span class="text-indigo-400 font-bold">1</span>
-              <span>Developer Opens PR</span>
-            </div>
-            <span class="text-slate-600">→</span>
-            <div class="flex items-center space-x-1.5 px-2.5 py-1 rounded-lg bg-space-950 border border-indigo-500/40 text-indigo-300">
-              <span class="text-indigo-400 font-bold">2</span>
-              <span>Deep AST & Schema Scan</span>
-            </div>
-            <span class="text-slate-600">→</span>
-            <div class="flex items-center space-x-1.5 px-2.5 py-1 rounded-lg bg-space-950 border border-purple-500/40 text-purple-300">
-              <span class="text-purple-400 font-bold">3</span>
-              <span>Downstream Blast Radius</span>
-            </div>
-            <span class="text-slate-600">→</span>
-            <div class="flex items-center space-x-1.5 px-2.5 py-1 rounded-lg bg-space-950 border border-emerald-500/40 text-emerald-300">
-              <span class="text-emerald-400 font-bold">4</span>
-              <span>Safe Merge or Hard Block</span>
-            </div>
-          </div>
-
           <button onclick="triggerWebhookSimulation()" class="px-3 py-1 rounded-lg text-xs font-semibold bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-300 border border-indigo-500/30 transition shrink-0 self-start lg:self-auto">
             ⚡ Simulate Incoming PR
           </button>
-
         </div>
       </div>
     </div>
 
     <!-- Live Toast Banner -->
     <div id="toast-banner" class="hidden max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 mt-4">
-      <div class="p-3 rounded-2xl bg-indigo-950/90 border border-indigo-500/40 text-xs text-indigo-200 flex items-center justify-between shadow-xl">
+      <div id="toast-box" class="p-3 rounded-2xl bg-indigo-950/90 border border-indigo-500/40 text-xs text-indigo-200 flex items-center justify-between shadow-xl">
         <span id="toast-text">System alert</span>
         <button onclick="document.getElementById('toast-banner').classList.add('hidden')" class="text-indigo-400 hover:text-white">✕</button>
       </div>
@@ -301,122 +259,83 @@
       <!-- Active Guarded Repository Control Strip -->
       <div class="p-4 rounded-2xl glass-panel flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div class="flex flex-wrap items-center gap-3">
-          <span class="text-xs text-slate-400 font-semibold uppercase tracking-wider flex items-center space-x-1.5">
-            <span>Guarded Repository:</span>
-          </span>
+          <span class="text-xs text-slate-400 font-semibold uppercase tracking-wider">Guarded Repository:</span>
           <select id="active-repo-select" onchange="onRepoChanged()" class="bg-space-950 border border-slate-700 text-white text-xs rounded-xl px-3 py-2 font-mono focus:outline-none focus:border-indigo-500">
-            <!-- Populated dynamically -->
           </select>
-          <button onclick="openAddRepoModal()" class="text-xs bg-space-850 hover:bg-space-800 text-indigo-300 border border-indigo-500/30 px-3 py-2 rounded-xl transition flex items-center space-x-1">
-            <span>+ Link New Repo</span>
+          <button onclick="openAddRepoModal()" class="text-xs bg-space-850 hover:bg-space-800 text-indigo-300 border border-indigo-500/30 px-3 py-2 rounded-xl transition">
+            + Link New Repo
           </button>
         </div>
 
         <div class="flex items-center space-x-2 text-xs">
-          <span class="text-slate-400">Webhook:</span>
-          <code class="bg-space-950 border border-slate-800 px-2.5 py-1 rounded-lg text-emerald-400 text-[11px]">Active (Render Cloud)</code>
+          <span class="text-slate-400">Source:</span>
+          <code id="data-source-pill" class="bg-space-950 border border-slate-800 px-2.5 py-1 rounded-lg text-emerald-400 text-[11px]">Live MongoDB + GitHub</code>
           <button onclick="refreshDashboard()" class="px-3 py-1.5 rounded-xl bg-space-850 hover:bg-space-800 text-slate-300 border border-slate-700 transition">
-            🔄 Refresh
+            🔄 Sync Live
           </button>
         </div>
       </div>
 
       <!-- ================================================================= -->
-      <!-- TAB 1: PR COMMAND CENTER (Default) -->
+      <!-- TAB 1: PR COMMAND CENTER -->
       <!-- ================================================================= -->
       <div id="tab-prs" class="space-y-6">
-        
-        <!-- 4 Metric KPI Badges -->
         <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
           <div class="p-4 rounded-2xl glass-panel">
-            <span class="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Active Pull Requests</span>
-            <p id="kpi-total" class="text-2xl font-extrabold text-white mt-1">3</p>
-            <p class="text-[11px] text-slate-500 mt-0.5">Scanned by DeployGuard AI</p>
+            <span class="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Pull Requests</span>
+            <p id="kpi-total" class="text-2xl font-extrabold text-white mt-1">0</p>
+            <p class="text-[11px] text-slate-500 mt-0.5">Active + Analyzed</p>
           </div>
           <div class="p-4 rounded-2xl glass-panel border-emerald-500/25">
-            <span class="text-[11px] font-semibold text-emerald-400 uppercase tracking-wider">Verified Safe (PASS)</span>
-            <p id="kpi-pass" class="text-2xl font-extrabold text-emerald-400 mt-1">1</p>
-            <p class="text-[11px] text-slate-500 mt-0.5">Zero breaking API changes</p>
+            <span class="text-[11px] font-semibold text-emerald-400 uppercase tracking-wider">Safe to Merge (PASS)</span>
+            <p id="kpi-pass" class="text-2xl font-extrabold text-emerald-400 mt-1">0</p>
+            <p class="text-[11px] text-slate-500 mt-0.5">Zero breaking changes</p>
           </div>
           <div class="p-4 rounded-2xl glass-panel border-amber-500/25">
             <span class="text-[11px] font-semibold text-amber-400 uppercase tracking-wider">Review Needed (WARN)</span>
-            <p id="kpi-warn" class="text-2xl font-extrabold text-amber-400 mt-1">1</p>
-            <p class="text-[11px] text-slate-500 mt-0.5">P0 impact · Canary advised</p>
+            <p id="kpi-warn" class="text-2xl font-extrabold text-amber-400 mt-1">0</p>
+            <p class="text-[11px] text-slate-500 mt-0.5">Canary rollout advised</p>
           </div>
           <div class="p-4 rounded-2xl glass-panel border-rose-500/25">
-            <span class="text-[11px] font-semibold text-rose-400 uppercase tracking-wider">Strictly Blocked (BLOCK)</span>
-            <p id="kpi-block" class="text-2xl font-extrabold text-rose-400 mt-1">1</p>
-            <p class="text-[11px] text-slate-500 mt-0.5">Outage risk in downstream services</p>
+            <span class="text-[11px] font-semibold text-rose-400 uppercase tracking-wider">Blocked (BLOCK)</span>
+            <p id="kpi-block" class="text-2xl font-extrabold text-rose-400 mt-1">0</p>
+            <p class="text-[11px] text-slate-500 mt-0.5">Outage risk detected</p>
           </div>
         </div>
 
-        <!-- PR Split Inspector Deck -->
         <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
-
-          <!-- Left List (5 cols) -->
           <div class="lg:col-span-5 space-y-3">
             <div class="flex items-center justify-between text-xs">
-              <span class="font-bold text-slate-300 uppercase tracking-wider">Select Pull Request to Inspect</span>
-              <span class="text-slate-500">Live Queue</span>
+              <span class="font-bold text-slate-300 uppercase tracking-wider">Pull Request Queue</span>
+              <span id="pr-queue-status" class="text-slate-500">Live Sync</span>
             </div>
-            <div id="pr-cards-list" class="space-y-2.5">
-              <!-- Dynamically populated -->
-            </div>
+            <div id="pr-cards-list" class="space-y-2.5"></div>
           </div>
 
-          <!-- Right Deep Inspection Deck (7 cols) -->
           <div class="lg:col-span-7">
-            <div id="pr-detail-deck" class="p-6 rounded-3xl glass-panel space-y-6">
-              <!-- Populated by renderPRDetails() -->
-            </div>
+            <div id="pr-detail-deck" class="p-6 rounded-3xl glass-panel space-y-6"></div>
           </div>
-
         </div>
-
       </div>
 
       <!-- ================================================================= -->
-      <!-- TAB 2: MICROSERVICE BLAST RADIUS GRAPH -->
+      <!-- TAB 2: MICROSERVICE BLAST RADIUS -->
       <!-- ================================================================= -->
       <div id="tab-blast" class="hidden space-y-6">
         <div class="p-6 rounded-3xl glass-panel space-y-4">
           <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/5 pb-4">
             <div>
-              <h2 class="text-lg font-extrabold text-white flex items-center space-x-2">
-                <span>🕸️ Microservice Architecture & Blast Radius Engine</span>
-              </h2>
-              <p class="text-xs text-slate-400 mt-1">
-                Visual cascade tree: shows how modified functions in the current PR propagate downstream across dependent microservices.
-              </p>
+              <h2 class="text-lg font-extrabold text-white">🕸️ Microservice Blast Radius Map</h2>
+              <p class="text-xs text-slate-400 mt-1">Live dependency graph computed for the currently selected Pull Request.</p>
             </div>
             <div class="flex items-center space-x-2 text-xs">
-              <span class="px-2.5 py-1 rounded-lg bg-rose-500/10 text-rose-400 border border-rose-500/25 font-semibold">🔴 P0 Core (Outage Risk)</span>
-              <span class="px-2.5 py-1 rounded-lg bg-amber-500/10 text-amber-400 border border-amber-500/25 font-semibold">🟠 P1 High SLA</span>
+              <span class="px-2.5 py-1 rounded-lg bg-rose-500/10 text-rose-400 border border-rose-500/25 font-semibold">🔴 P0 Core</span>
+              <span class="px-2.5 py-1 rounded-lg bg-amber-500/10 text-amber-400 border border-amber-500/25 font-semibold">🟠 P1 High</span>
               <span class="px-2.5 py-1 rounded-lg bg-indigo-500/10 text-indigo-400 border border-indigo-500/25 font-semibold">🔵 P2 Standard</span>
             </div>
           </div>
-
-          <!-- Interactive Network Canvas -->
           <div id="blast-network-canvas" class="w-full h-[420px] rounded-2xl bg-space-950/70 border border-slate-800 relative"></div>
-
-          <!-- Downstream Service Impact Table -->
-          <div class="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2">
-            <div class="p-4 rounded-2xl bg-space-950/60 border border-slate-800 space-y-1">
-              <span class="text-[10px] font-bold text-slate-400 uppercase">Impacted Service 1</span>
-              <p class="text-sm font-bold text-white">auth-service <span class="text-xs text-rose-400 font-mono">[P0 Critical]</span></p>
-              <p class="text-xs text-slate-400">Dependency: Session token verification & JWT claims check.</p>
-            </div>
-            <div class="p-4 rounded-2xl bg-space-950/60 border border-slate-800 space-y-1">
-              <span class="text-[10px] font-bold text-slate-400 uppercase">Impacted Service 2</span>
-              <p class="text-sm font-bold text-white">payment-service <span class="text-xs text-rose-400 font-mono">[P0 Critical]</span></p>
-              <p class="text-xs text-slate-400">Dependency: Stripe webhook handler & billing transaction gateway.</p>
-            </div>
-            <div class="p-4 rounded-2xl bg-space-950/60 border border-slate-800 space-y-1">
-              <span class="text-[10px] font-bold text-slate-400 uppercase">Impacted Service 3</span>
-              <p class="text-sm font-bold text-white">notification-service <span class="text-xs text-amber-400 font-mono">[P1 High]</span></p>
-              <p class="text-xs text-slate-400">Dependency: Transaction receipt emails & Slack release hooks.</p>
-            </div>
-          </div>
+          <div id="blast-service-cards" class="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2"></div>
         </div>
       </div>
 
@@ -426,37 +345,31 @@
       <div id="tab-release" class="hidden space-y-6">
         <div class="p-6 rounded-3xl glass-panel space-y-6">
           <div class="border-b border-white/5 pb-4">
-            <h2 class="text-lg font-extrabold text-white flex items-center space-x-2">
-              <span>🚀 Enterprise Release & CI/CD Command Hub</span>
-            </h2>
-            <p class="text-xs text-slate-400 mt-1">
-              Automated 3-stage release guard: Pre-deploy testing, policy gate merge, and 10% progressive canary rollout.
-            </p>
+            <h2 class="text-lg font-extrabold text-white">🚀 Enterprise Release & CI/CD Command Hub</h2>
+            <p class="text-xs text-slate-400 mt-1">Run contract checks, enforce the merge gate, and trigger progressive canary rollouts persisted in MongoDB.</p>
           </div>
 
           <div class="grid grid-cols-1 md:grid-cols-3 gap-5">
-            <!-- Stage 1 -->
             <div class="p-5 rounded-2xl bg-space-950/80 border border-slate-800 space-y-3">
               <div class="flex items-center space-x-2">
                 <span class="w-6 h-6 rounded-full bg-indigo-600/30 text-indigo-300 border border-indigo-500/40 flex items-center justify-center font-bold text-xs">1</span>
-                <h3 class="text-xs font-bold text-white uppercase tracking-wider">Pre-Deploy Contract Tests</h3>
+                <h3 class="text-xs font-bold text-white uppercase tracking-wider">AST & Risk Verification</h3>
               </div>
-              <p class="text-xs text-slate-400">Executes AST diff regression checks, schema validation, and unit test suites.</p>
-              <button onclick="runTestSuite()" id="btn-run-tests" class="w-full py-2.5 rounded-xl font-bold text-xs bg-space-850 hover:bg-space-800 text-indigo-300 border border-indigo-500/30 transition">
-                🧪 Run Automated Tests
+              <p class="text-xs text-slate-400">Runs live on-demand AST + Blast Radius analysis on the selected PR via backend API.</p>
+              <button onclick="rescanActivePR()" id="btn-run-tests" class="w-full py-2.5 rounded-xl font-bold text-xs bg-space-850 hover:bg-space-800 text-indigo-300 border border-indigo-500/30 transition">
+                🧪 Run Live Verification Scan
               </button>
               <div id="test-output-log" class="hidden text-[11px] p-3 rounded-xl bg-space-900 border border-slate-800 font-mono text-slate-300"></div>
             </div>
 
-            <!-- Stage 2 -->
             <div class="p-5 rounded-2xl bg-space-950/80 border border-slate-800 space-y-3">
               <div class="flex items-center space-x-2">
                 <span class="w-6 h-6 rounded-full bg-emerald-600/30 text-emerald-300 border border-emerald-500/40 flex items-center justify-center font-bold text-xs">2</span>
                 <h3 class="text-xs font-bold text-white uppercase tracking-wider">Safe Merge Gate</h3>
               </div>
-              <p class="text-xs text-slate-400">Direct GitHub branch merge. Enforces strict governance: blocks when risk score exceeds 35.</p>
-              <button onclick="triggerActivePRMerge(false)" id="btn-release-merge" class="w-full py-2.5 rounded-xl font-bold text-xs bg-emerald-600 hover:bg-emerald-500 text-white transition shadow-lg shadow-emerald-600/20">
-                🔀 Merge Active PR
+              <p class="text-xs text-slate-400">Executes real GitHub PR merge after checking governance thresholds.</p>
+              <button onclick="triggerActivePRMerge(document.getElementById('check-hub-override').checked)" id="btn-release-merge" class="w-full py-2.5 rounded-xl font-bold text-xs bg-emerald-600 hover:bg-emerald-500 text-white transition shadow-lg shadow-emerald-600/20">
+                🔀 Merge Active PR on GitHub
               </button>
               <div class="flex items-center space-x-2 text-[11px] text-slate-400 pt-1">
                 <input type="checkbox" id="check-hub-override" class="rounded bg-space-900 border-slate-700 text-indigo-600">
@@ -464,13 +377,12 @@
               </div>
             </div>
 
-            <!-- Stage 3 -->
             <div class="p-5 rounded-2xl bg-space-950/80 border border-slate-800 space-y-3">
               <div class="flex items-center space-x-2">
                 <span class="w-6 h-6 rounded-full bg-violet-600/30 text-violet-300 border border-violet-500/40 flex items-center justify-center font-bold text-xs">3</span>
                 <h3 class="text-xs font-bold text-white uppercase tracking-wider">Canary Rollout (10%)</h3>
               </div>
-              <p class="text-xs text-slate-400">Progressive 10% traffic rollout with real-time anomaly monitoring before 100% release.</p>
+              <p class="text-xs text-slate-400">Triggers real deployment pipeline via <code>POST /enterprise/.../deploy</code>.</p>
               <button onclick="triggerCanaryRollout()" id="btn-canary" class="w-full py-2.5 rounded-xl font-bold text-xs bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white transition shadow-lg shadow-violet-600/20">
                 🚀 Deploy 10% Canary
               </button>
@@ -478,14 +390,12 @@
             </div>
           </div>
 
-          <!-- Real-Time Audit Console -->
           <div class="space-y-2 pt-2 border-t border-white/5">
-            <span class="text-xs font-bold text-slate-400 uppercase tracking-wider">Live Audit Trail (MongoDB Persistence)</span>
-            <div id="live-audit-terminal" class="p-4 rounded-2xl bg-space-950 border border-slate-800 font-mono text-xs text-slate-400 space-y-1.5 h-44 overflow-y-auto">
-              <p class="text-slate-600">[2026-11-23 15:00:00 UTC] DeployGuard Governance Engine initialized.</p>
-              <p class="text-slate-500">[2026-11-23 15:10:14 UTC] Webhook listener connected to https://deployguard-ai.onrender.com</p>
-              <p class="text-emerald-400/90">[2026-11-23 15:14:22 UTC] AST engine scanned PR #1: Zero breaking changes. Decision PASS.</p>
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-bold text-slate-400 uppercase tracking-wider">Live Audit & Deployment Trail (MongoDB)</span>
+              <button onclick="loadAuditLogs()" class="text-[11px] text-indigo-400 hover:text-indigo-300">↻ Refresh Logs</button>
             </div>
+            <div id="live-audit-terminal" class="p-4 rounded-2xl bg-space-950 border border-slate-800 font-mono text-xs text-slate-400 space-y-1.5 h-48 overflow-y-auto"></div>
           </div>
         </div>
       </div>
@@ -497,26 +407,24 @@
         <div class="p-6 rounded-3xl glass-panel space-y-6">
           <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/5 pb-4">
             <div>
-              <h2 class="text-lg font-extrabold text-white flex items-center space-x-2">
-                <span>📦 Connected Repositories</span>
-              </h2>
-              <p class="text-xs text-slate-400 mt-1">Add and manage the GitHub repositories guarded by DeployGuard AI.</p>
+              <h2 class="text-lg font-extrabold text-white">📦 Connected Repositories & GitHub Link</h2>
+              <p class="text-xs text-slate-400 mt-1">Connect your GitHub account to import your enterprise repositories automatically.</p>
             </div>
-            <button onclick="openAddRepoModal()" class="px-4 py-2 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white transition shadow-lg shadow-indigo-600/20">
-              + Link New GitHub Repo
-            </button>
+            <div class="flex items-center space-x-2">
+              <button onclick="openConnectGitHubModal()" class="px-4 py-2 rounded-xl text-xs font-bold bg-space-850 hover:bg-space-800 border border-slate-700 text-slate-200 transition">
+                🔗 Connect GitHub PAT
+              </button>
+              <button onclick="openAddRepoModal()" class="px-4 py-2 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white transition shadow-lg shadow-indigo-600/20">
+                + Link Repo
+              </button>
+            </div>
           </div>
 
-          <div id="repo-cards-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            <!-- Populated dynamically -->
-          </div>
+          <div id="repo-cards-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"></div>
 
-          <!-- Webhook instructions -->
           <div class="p-5 rounded-2xl bg-space-950/80 border border-indigo-500/20 space-y-3">
-            <h3 class="text-xs font-bold text-indigo-300 uppercase tracking-wider">GitHub Webhook Setup (Zero Friction)</h3>
-            <p class="text-xs text-slate-300">
-              In any GitHub repository: <strong>Settings ➔ Webhooks ➔ Add webhook</strong>:
-            </p>
+            <h3 class="text-xs font-bold text-indigo-300 uppercase tracking-wider">Automatic Webhook Setup</h3>
+            <p class="text-xs text-slate-300">In any GitHub repository: <strong>Settings ➔ Webhooks ➔ Add webhook</strong>:</p>
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs font-mono">
               <div class="p-3 rounded-xl bg-space-900 border border-slate-800">
                 <span class="text-[10px] text-slate-500 block">PAYLOAD URL</span>
@@ -537,20 +445,22 @@
       <div id="tab-policy" class="hidden space-y-6">
         <div class="p-6 rounded-3xl glass-panel space-y-6">
           <div class="border-b border-white/5 pb-4">
-            <h2 class="text-lg font-extrabold text-white flex items-center space-x-2">
-              <span>⚙️ Enterprise Release Risk Governance</span>
-            </h2>
-            <p class="text-xs text-slate-400 mt-1">Define mandatory risk gates, SLA protection thresholds, and branch compliance rules.</p>
+            <h2 class="text-lg font-extrabold text-white">⚙️ Enterprise Release Risk Governance</h2>
+            <p class="text-xs text-slate-400 mt-1">Synced directly with MongoDB <code>enterprise_policy</code> collection.</p>
           </div>
 
           <div class="space-y-5 max-w-xl text-xs">
+            <div class="space-y-2">
+              <label class="font-semibold text-slate-200 block">Organization Name</label>
+              <input type="text" id="pol-org-name" value="DeployGuard Enterprise" class="w-full bg-space-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-white">
+            </div>
+
             <div class="space-y-2">
               <div class="flex justify-between items-center">
                 <span class="font-semibold text-slate-200">Max Auto-Merge Risk Score Threshold</span>
                 <span id="label-policy-score" class="font-bold text-indigo-400 font-mono text-sm">35 / 100</span>
               </div>
-              <input type="range" id="input-policy-score" min="10" max="80" value="35" oninput="document.getElementById('label-policy-score').innerText = this.value + ' / 100'" class="w-full accent-indigo-500 cursor-pointer">
-              <p class="text-[11px] text-slate-500">PRs scoring higher than this will strictly require manual lead approval.</p>
+              <input type="range" id="input-policy-score" min="10" max="90" value="35" oninput="document.getElementById('label-policy-score').innerText = this.value + ' / 100'" class="w-full accent-indigo-500 cursor-pointer">
             </div>
 
             <div class="space-y-3 pt-3 border-t border-slate-800">
@@ -558,32 +468,32 @@
                 <input type="checkbox" id="pol-p0" checked class="mt-0.5 rounded bg-space-950 border-slate-700 text-indigo-600">
                 <div>
                   <span class="font-bold text-slate-200 block">Strict Block on P0 SLA Downstream Impact</span>
-                  <span class="text-[11px] text-slate-400 block">Automatically reject PR merge if any mission-critical downstream microservice is affected.</span>
+                  <span class="text-[11px] text-slate-400 block">Reject PR merge if any mission-critical downstream service is affected.</span>
                 </div>
               </label>
 
               <label class="flex items-start space-x-3 cursor-pointer">
-                <input type="checkbox" id="pol-breaking" checked class="mt-0.5 rounded bg-space-950 border-slate-700 text-indigo-600">
+                <input type="checkbox" id="pol-breaking" class="mt-0.5 rounded bg-space-950 border-slate-700 text-indigo-600">
                 <div>
                   <span class="font-bold text-slate-200 block">Block on Breaking Public API Changes</span>
-                  <span class="text-[11px] text-slate-400 block">Rejects PR when public endpoints or function signatures are deleted without deprecation headers.</span>
+                  <span class="text-[11px] text-slate-400 block">Rejects PR when public endpoints or signatures are deleted.</span>
                 </div>
               </label>
 
               <label class="flex items-start space-x-3 cursor-pointer">
                 <input type="checkbox" id="pol-canary" checked class="mt-0.5 rounded bg-space-950 border-slate-700 text-indigo-600">
                 <div>
-                  <span class="font-bold text-slate-200 block">Mandatory 10% Canary for Medium-Risk PRs (WARN)</span>
-                  <span class="text-[11px] text-slate-400 block">Disallow direct 100% rollout when a pull request triggers a WARN rating.</span>
+                  <span class="font-bold text-slate-200 block">Require Canary for Medium-Risk PRs (WARN)</span>
+                  <span class="text-[11px] text-slate-400 block">Disallow direct 100% rollout when a PR triggers a WARN rating.</span>
                 </div>
               </label>
             </div>
 
-            <div class="pt-3">
+            <div class="pt-3 flex items-center space-x-3">
               <button onclick="saveGovernancePolicy()" class="px-5 py-2.5 rounded-xl font-bold text-xs bg-indigo-600 hover:bg-indigo-500 text-white transition shadow-lg shadow-indigo-600/20">
                 💾 Save Policy to MongoDB
               </button>
-              <span id="policy-feedback" class="ml-3 text-xs text-emerald-400 hidden">✓ Governance policy updated successfully!</span>
+              <span id="policy-feedback" class="text-xs text-emerald-400 hidden">✓ Saved to MongoDB!</span>
             </div>
           </div>
         </div>
@@ -591,22 +501,20 @@
 
     </main>
 
-    <!-- Footer -->
     <footer class="border-t border-white/5 bg-space-950 py-5 text-center text-xs text-slate-500 mt-12">
       <div class="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-3">
-        <span class="font-medium">🛡️ DeployGuard AI · AI-Powered Release Governance Platform</span>
+        <span class="font-medium">🛡️ DeployGuard AI · Enterprise Release Governance Platform</span>
         <div class="flex items-center space-x-4">
           <a href="https://github.com/chandanknayak/deployguard-ai" target="_blank" class="hover:text-slate-300">GitHub</a>
-          <a href="/docs" target="_blank" class="hover:text-slate-300">FastAPI Swagger</a>
+          <a href="/docs" target="_blank" class="hover:text-slate-300">API Docs</a>
           <a href="https://deployguard-ai.streamlit.app" target="_blank" class="hover:text-slate-300">Streamlit App</a>
         </div>
       </div>
     </footer>
-
   </div>
 
   <!-- ===================================================================== -->
-  <!-- MODAL: ADD / LINK GITHUB REPOSITORY -->
+  <!-- MODAL: LINK GITHUB REPOSITORY -->
   <!-- ===================================================================== -->
   <div id="modal-add-repo" class="hidden fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
     <div class="bg-space-900 border border-white/10 rounded-3xl max-w-md w-full p-6 space-y-4 shadow-2xl">
@@ -614,19 +522,24 @@
         <h3 class="text-base font-extrabold text-white">📦 Link GitHub Repository</h3>
         <button onclick="closeAddRepoModal()" class="text-slate-400 hover:text-white">✕</button>
       </div>
-      <p class="text-xs text-slate-400">Connect an enterprise repository to guard incoming pull requests against breaking changes.</p>
-      
+      <p class="text-xs text-slate-400">Enter any GitHub repository (<code>owner/repo</code>) to inspect PRs and guard releases.</p>
+
+      <div id="available-repos-picker" class="hidden space-y-1.5">
+        <label class="text-xs font-semibold text-indigo-300 block">Quick Pick from Your Connected GitHub:</label>
+        <select id="available-repos-select" onchange="document.getElementById('new-repo-input').value = this.value" class="w-full bg-space-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white font-mono"></select>
+      </div>
+
       <div class="space-y-3">
         <div>
           <label class="text-xs font-semibold text-slate-300 block mb-1">Repository Full Name (owner/repo)</label>
-          <input type="text" id="new-repo-input" placeholder="e.g. acme-corp/billing-service" class="w-full bg-space-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-indigo-500 font-mono">
+          <input type="text" id="new-repo-input" placeholder="e.g. chandanknayak/deployguard-ai" class="w-full bg-space-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-indigo-500 font-mono">
         </div>
         <div>
           <label class="text-xs font-semibold text-slate-300 block mb-1">Service SLA Tier</label>
           <select id="new-repo-sla" class="w-full bg-space-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white">
-            <option value="P0">P0 — Critical Core Service (Payment, Auth)</option>
-            <option value="P1">P1 — High SLA (Notifications, Search)</option>
-            <option value="P2">P2 — Standard SLA (Reporting, Analytics)</option>
+            <option value="P0">P0 — Critical Core Service</option>
+            <option value="P1">P1 — High SLA Service</option>
+            <option value="P2">P2 — Standard Service</option>
           </select>
         </div>
       </div>
@@ -639,287 +552,508 @@
   </div>
 
   <!-- ===================================================================== -->
-  <!-- JAVASCRIPT STATE ENGINE & CORE LOGIC -->
+  <!-- MODAL: CONNECT GITHUB ACCOUNT (PAT) -->
+  <!-- ===================================================================== -->
+  <div id="modal-connect-gh" class="hidden fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
+    <div class="bg-space-900 border border-white/10 rounded-3xl max-w-md w-full p-6 space-y-4 shadow-2xl">
+      <div class="flex items-center justify-between">
+        <h3 class="text-base font-extrabold text-white">🔗 Connect Your GitHub Account</h3>
+        <button onclick="closeConnectGitHubModal()" class="text-slate-400 hover:text-white">✕</button>
+      </div>
+      <p class="text-xs text-slate-400">Paste a GitHub Personal Access Token (<code>repo</code> scope) to import your private/public repos and merge PRs directly from DeployGuard.</p>
+      <div class="space-y-2">
+        <label class="text-xs font-semibold text-slate-300 block">GitHub Personal Access Token</label>
+        <input type="password" id="gh-pat-input" placeholder="ghp_xxxxxxxxxxxxxxxxxxxx" class="w-full bg-space-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white font-mono focus:outline-none focus:border-indigo-500">
+      </div>
+      <div id="gh-connect-feedback" class="hidden text-xs p-2.5 rounded-xl"></div>
+      <div class="flex justify-end space-x-2 pt-2">
+        <button onclick="closeConnectGitHubModal()" class="px-4 py-2 text-xs rounded-xl text-slate-400 hover:text-white">Cancel</button>
+        <button onclick="submitConnectGitHub()" class="px-5 py-2 text-xs font-bold rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white transition">Verify & Link GitHub</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================================================================== -->
+  <!-- JAVASCRIPT ENGINE — WIRED TO REAL BACKEND APIS -->
   <!-- ===================================================================== -->
   <script>
-    // -------------------------------------------------------------------------
-    // Enterprise State
-    // -------------------------------------------------------------------------
     const API_BASE = window.location.origin;
 
+    const FALLBACK_PRS = [
+      {
+        pr_number: 1,
+        title: "feat(core): Add async exponential backoff retry utility",
+        author: "chandanknayak",
+        branch: "feat-retry",
+        base_branch: "main",
+        additions: 124,
+        deletions: 8,
+        changed_files: 3,
+        risk_level: "PASS",
+        risk_score: 18,
+        decision: "PASS",
+        blast_radius: { affected_services: ["deployguard-ai", "notification-service"], max_sla_tier: "P1", total_downstream: 2 },
+        ast_summary: { breaking_changes: 0, schema_changes: false },
+        plain_explanation: "Zero breaking changes. Pure additive retry utility with test coverage. Safe to merge.",
+        rationale: "Additive enhancement with zero breaking public API signatures or database schema changes."
+      }
+    ];
+
     const STATE = {
-      isLoggedIn: true,
-      currentUser: {
-        email: "lead@enterprise.com",
-        company: "Acme Global Platform",
-        role: "Tech Lead / Release Engineer",
-      },
-      repos: [
-        { name: "chandanknayak/deployguard-ai", sla: "P0", desc: "Core API & Release Engine", prsCount: 3 },
-        { name: "acme-corp/payment-service", sla: "P0", desc: "Payment Gateway & Billing Workers", prsCount: 1 },
-        { name: "acme-corp/auth-core", sla: "P0", desc: "Identity, JWT & OAuth Provider", prsCount: 0 },
-      ],
+      token: localStorage.getItem("deployguard_token") || null,
+      user: JSON.parse(localStorage.getItem("deployguard_user") || "null"),
+      repos: [{ name: "chandanknayak/deployguard-ai", sla: "P0", desc: "Primary Guarded Repository" }],
       activeRepo: "chandanknayak/deployguard-ai",
-      prs: [
-        {
-          pr_number: 1,
-          title: "feat(core): Add async exponential backoff retry utility",
-          author: "chandanknayak",
-          branch: "feat-retry",
-          base_branch: "main",
-          additions: 124,
-          deletions: 8,
-          changed_files: 3,
-          risk_level: "PASS",
-          risk_score: 18,
-          decision: "PASS",
-          blast_radius: {
-            affected_services: ["deployguard-ai", "notification-service"],
-            max_sla_tier: "P1",
-            total_downstream: 2
-          },
-          ast_summary: {
-            breaking_changes: 0,
-            added_classes: ["AsyncRetryPolicy"],
-            added_functions: ["with_exponential_backoff"],
-            schema_changes: false,
-            missing_tests: false
-          },
-          plain_explanation: "Zero breaking changes. Introduces async exponential retry utility with 100% unit test coverage. Perfectly safe to merge.",
-          rationale: "Pure additive enhancement. Introduces robust async exponential backoff utility with comprehensive unit test coverage. No breaking public API signatures or schema modifications detected."
-        },
-        {
-          pr_number: 2,
-          title: "refactor(auth): Update session token verification schema",
-          author: "alex-dev",
-          branch: "refactor-auth-v2",
-          base_branch: "main",
-          additions: 340,
-          deletions: 190,
-          changed_files: 8,
-          risk_level: "WARN",
-          risk_score: 54,
-          decision: "WARN",
-          blast_radius: {
-            affected_services: ["auth-core", "payment-service", "gateway-api"],
-            max_sla_tier: "P0",
-            total_downstream: 3
-          },
-          ast_summary: {
-            breaking_changes: 1,
-            added_classes: ["TokenValidatorV2"],
-            added_functions: ["verify_jwt_claim"],
-            schema_changes: true,
-            missing_tests: false
-          },
-          plain_explanation: "Impacts mission-critical P0 auth services. Non-breaking fallback included, but mandatory 10% canary rollout advised.",
-          rationale: "Modifies core session verification logic impacting P0 auth services. Non-breaking fallback present but canary rollout of 10% is strongly advised before full deployment."
-        },
-        {
-          pr_number: 3,
-          title: "feat(payments): Remove deprecated Stripe v1 charge endpoints",
-          author: "sara-fintech",
-          branch: "drop-stripe-v1",
-          base_branch: "main",
-          additions: 45,
-          deletions: 480,
-          changed_files: 12,
-          risk_level: "BLOCK",
-          risk_score: 88,
-          decision: "BLOCK",
-          blast_radius: {
-            affected_services: ["payment-service", "billing-worker", "customer-portal", "invoice-gen"],
-            max_sla_tier: "P0",
-            total_downstream: 4
-          },
-          ast_summary: {
-            breaking_changes: 5,
-            added_classes: [],
-            added_functions: [],
-            schema_changes: true,
-            missing_tests: true
-          },
-          plain_explanation: "CRITICAL: Deletes 5 endpoints still actively consumed by billing-worker. Merging will cause downstream payment failures!",
-          rationale: "CRITICAL: Deletes 5 public endpoint handlers currently invoked by billing-worker. Violates P0 SLA zero-breaking-change release policy. Automated merge blocked."
-        }
-      ],
-      selectedPRIndex: 0
+      prs: [],
+      selectedPRIndex: 0,
+      availableGitHubRepos: []
     };
 
     let visNetwork = null;
+    let currentAuthMode = "login";
 
-    // -------------------------------------------------------------------------
-    // Lifecycle Initialization
-    // -------------------------------------------------------------------------
-    document.addEventListener("DOMContentLoaded", () => {
-      // Load saved state from localStorage if any
-      const savedUser = localStorage.getItem("deployguard_user");
-      if (savedUser) {
-        try {
-          STATE.currentUser = JSON.parse(savedUser);
-          STATE.isLoggedIn = true;
-        } catch(e) {}
-      }
-
-      applyAuthState();
-      populateRepoSelectors();
-      renderPRCards();
-      renderPRDetails();
-      checkCloudHealth();
+    document.addEventListener("DOMContentLoaded", async () => {
+      updateUserHeader();
+      await checkCloudHealth();
+      await loadGovernancePolicy();
+      await loadRepositories();
+      await loadPullRequests();
+      await loadAuditLogs();
     });
 
+    function authHeaders() {
+      const h = { "Content-Type": "application/json" };
+      if (STATE.token) h["Authorization"] = `Bearer ${STATE.token}`;
+      return h;
+    }
+
     // -------------------------------------------------------------------------
-    // Cloud Health Probe
+    // Health Check
     // -------------------------------------------------------------------------
     async function checkCloudHealth() {
+      const txt = document.getElementById("cloud-status-text");
+      const dot = document.getElementById("cloud-status-dot");
       try {
-        const r = await fetch(`${API_BASE}/healthz`);
-        if (r.ok) {
-          document.getElementById("cloud-status-text").innerText = "Cloud Engine Active";
+        const r = await fetch(`${API_BASE}/readyz`);
+        const d = await r.json();
+        if (r.ok && d.status === "ready") {
+          txt.innerText = "Cloud + MongoDB Online";
+          dot.className = "w-2 h-2 rounded-full bg-emerald-400 status-pulse";
+        } else {
+          txt.innerText = "API Online (Degraded DB)";
+          dot.className = "w-2 h-2 rounded-full bg-amber-400";
         }
-      } catch (e) {
-        document.getElementById("cloud-status-text").innerText = "Local Engine Active";
+      } catch {
+        txt.innerText = "Offline / Demo Fallback";
+        dot.className = "w-2 h-2 rounded-full bg-rose-400";
       }
     }
 
     // -------------------------------------------------------------------------
-    // Auth Handlers
+    // Auth Flow (Real JWT + MongoDB)
     // -------------------------------------------------------------------------
-    let currentAuthMode = 'login';
+    function openAuthScreen() {
+      document.getElementById("auth-screen").classList.remove("hidden");
+      document.getElementById("app-screen").classList.add("hidden");
+    }
+
+    function closeAuthScreen() {
+      document.getElementById("auth-screen").classList.add("hidden");
+      document.getElementById("app-screen").classList.remove("hidden");
+    }
+
     function setAuthMode(mode) {
       currentAuthMode = mode;
-      const btnLog = document.getElementById("auth-tab-login");
-      const btnReg = document.getElementById("auth-tab-register");
-      const fComp = document.getElementById("field-company");
-      const fRole = document.getElementById("field-role");
-      const submitBtn = document.getElementById("auth-submit-btn");
-
-      if (mode === 'login') {
-        btnLog.className = "flex-1 py-2 rounded-lg font-semibold transition bg-indigo-600 text-white shadow";
-        btnReg.className = "flex-1 py-2 rounded-lg font-semibold transition text-slate-400 hover:text-white";
-        fComp.classList.add("hidden");
-        fRole.classList.add("hidden");
-        submitBtn.innerText = "Sign In to Workspace";
-      } else {
-        btnReg.className = "flex-1 py-2 rounded-lg font-semibold transition bg-indigo-600 text-white shadow";
-        btnLog.className = "flex-1 py-2 rounded-lg font-semibold transition text-slate-400 hover:text-white";
-        fComp.classList.remove("hidden");
-        fRole.classList.remove("hidden");
-        submitBtn.innerText = "Create Enterprise Account";
-      }
+      const isReg = mode === "register";
+      document.getElementById("auth-tab-login").className = isReg
+        ? "flex-1 py-2 rounded-lg font-semibold transition text-slate-400 hover:text-white"
+        : "flex-1 py-2 rounded-lg font-semibold transition bg-indigo-600 text-white shadow";
+      document.getElementById("auth-tab-register").className = isReg
+        ? "flex-1 py-2 rounded-lg font-semibold transition bg-indigo-600 text-white shadow"
+        : "flex-1 py-2 rounded-lg font-semibold transition text-slate-400 hover:text-white";
+      document.getElementById("field-fullname").classList.toggle("hidden", !isReg);
+      document.getElementById("field-company").classList.toggle("hidden", !isReg);
+      document.getElementById("auth-submit-btn").innerText = isReg ? "Create Enterprise Account" : "Sign In to Workspace";
+      document.getElementById("auth-error-box").classList.add("hidden");
     }
 
-    function handleAuthSubmit(e) {
+    async function handleAuthSubmit(e) {
       e.preventDefault();
-      const email = document.getElementById("auth-email").value;
-      const comp = document.getElementById("auth-company").value || "My Enterprise Platform";
-      const role = document.getElementById("auth-role").value || "Tech Lead";
+      const errBox = document.getElementById("auth-error-box");
+      errBox.classList.add("hidden");
 
-      STATE.currentUser = { email, company: comp, role };
-      STATE.isLoggedIn = true;
-      localStorage.setItem("deployguard_user", JSON.stringify(STATE.currentUser));
+      const email = document.getElementById("auth-email").value.trim();
+      const password = document.getElementById("auth-password").value;
+      const fullName = document.getElementById("auth-fullname").value.trim() || email.split("@")[0];
+      const company = document.getElementById("auth-company").value.trim() || "Enterprise Workspace";
 
-      applyAuthState();
-      showToast(`✓ Welcome to DeployGuard, ${comp}!`);
+      const endpoint = currentAuthMode === "register" ? "/auth/register" : "/auth/login";
+      const payload = currentAuthMode === "register"
+        ? { email, password, full_name: fullName, company }
+        : { email, password };
+
+      try {
+        const res = await fetch(`${API_BASE}${endpoint}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          errBox.innerText = data.detail || "Authentication failed";
+          errBox.classList.remove("hidden");
+          return;
+        }
+        STATE.token = data.access_token;
+        STATE.user = data.user;
+        localStorage.setItem("deployguard_token", STATE.token);
+        localStorage.setItem("deployguard_user", JSON.stringify(STATE.user));
+        updateUserHeader();
+        closeAuthScreen();
+        showToast(`✓ Signed in as ${data.user.email}`);
+        await loadRepositories();
+        await loadPullRequests();
+      } catch (err) {
+        errBox.innerText = "Network error connecting to backend.";
+        errBox.classList.remove("hidden");
+      }
     }
 
     function quickDemoLogin() {
-      STATE.currentUser = {
-        email: "lead@enterprise.com",
-        company: "Acme Global Platform",
-        role: "Tech Lead / Release Engineer"
-      };
-      STATE.isLoggedIn = true;
-      localStorage.setItem("deployguard_user", JSON.stringify(STATE.currentUser));
-      applyAuthState();
-      showToast("✓ One-click demo access granted.");
+      closeAuthScreen();
+      showToast("✓ Viewing live DeployGuard Enterprise Workspace.");
     }
 
-    function logout() {
-      STATE.isLoggedIn = false;
-      localStorage.removeItem("deployguard_user");
-      applyAuthState();
-    }
-
-    function applyAuthState() {
-      const authScr = document.getElementById("auth-screen");
-      const appScr = document.getElementById("app-screen");
-
-      if (!STATE.isLoggedIn) {
-        authScr.classList.remove("hidden");
-        appScr.classList.add("hidden");
+    function updateUserHeader() {
+      const u = STATE.user;
+      if (u) {
+        const comp = u.company || u.full_name || "Enterprise Workspace";
+        document.getElementById("header-company-name").innerText = comp;
+        document.getElementById("user-nav-email").innerText = u.email;
+        document.getElementById("user-initials-badge").innerText = comp.slice(0, 2).toUpperCase();
+        document.getElementById("header-github-badge").innerText = u.github_connected
+          ? `GitHub: @${u.github_username}`
+          : "GitHub: Public Mode";
       } else {
-        authScr.classList.add("hidden");
-        appScr.classList.remove("hidden");
-
-        // Personalize header
-        document.getElementById("header-company-name").innerText = STATE.currentUser.company;
-        document.getElementById("header-user-role").innerText = STATE.currentUser.role;
-        document.getElementById("user-nav-email").innerText = STATE.currentUser.email;
-
-        const initials = STATE.currentUser.company.split(" ").map(w => w[0]).join("").slice(0, 2).toUpperCase() || "DG";
-        document.getElementById("user-initials-badge").innerText = initials;
+        document.getElementById("header-company-name").innerText = "DeployGuard Enterprise";
+        document.getElementById("user-nav-email").innerText = "Live Public View";
+        document.getElementById("user-initials-badge").innerText = "DG";
       }
     }
 
     // -------------------------------------------------------------------------
-    // Navigation Tabs
+    // GitHub Connect & Repositories
     // -------------------------------------------------------------------------
-    function switchTab(tabKey) {
-      const allTabs = ["prs", "blast", "release", "repos", "policy"];
-      allTabs.forEach(k => {
-        const el = document.getElementById(`tab-${k}`);
-        const btn = document.getElementById(`nav-btn-${k}`);
-        if (k === tabKey) {
-          el.classList.remove("hidden");
-          btn.className = "px-3.5 py-1.5 rounded-lg font-semibold transition bg-indigo-600 text-white shadow-sm";
-        } else {
-          el.classList.add("hidden");
-          btn.className = "px-3.5 py-1.5 rounded-lg font-semibold transition text-slate-400 hover:text-white hover:bg-space-800";
+    function openConnectGitHubModal() {
+      if (!STATE.token) {
+        showToast("Please Sign In or Create an Enterprise Account first to link your personal GitHub.", true);
+        openAuthScreen();
+        return;
+      }
+      document.getElementById("modal-connect-gh").classList.remove("hidden");
+    }
+    function closeConnectGitHubModal() {
+      document.getElementById("modal-connect-gh").classList.add("hidden");
+    }
+
+    async function submitConnectGitHub() {
+      const pat = document.getElementById("gh-pat-input").value.trim();
+      const fb = document.getElementById("gh-connect-feedback");
+      if (!pat) return;
+      fb.classList.remove("hidden");
+      fb.className = "text-xs p-2.5 rounded-xl bg-space-950 text-slate-300";
+      fb.innerText = "Verifying GitHub token...";
+
+      try {
+        const res = await fetch(`${API_BASE}/auth/connect-github`, {
+          method: "POST",
+          headers: authHeaders(),
+          body: JSON.stringify({ github_token: pat })
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          fb.className = "text-xs p-2.5 rounded-xl bg-rose-950/50 text-rose-300 border border-rose-500/30";
+          fb.innerText = data.detail || "Failed to connect GitHub";
+          return;
         }
-      });
-
-      if (tabKey === 'blast') {
-        setTimeout(renderBlastNetwork, 60);
+        STATE.user.github_connected = true;
+        STATE.user.github_username = data.github_username;
+        STATE.availableGitHubRepos = data.available_repos || [];
+        localStorage.setItem("deployguard_user", JSON.stringify(STATE.user));
+        updateUserHeader();
+        closeConnectGitHubModal();
+        showToast(`✓ Connected GitHub @${data.github_username}! Found ${STATE.availableGitHubRepos.length} repositories.`);
+        populateAvailableReposPicker();
+      } catch {
+        fb.className = "text-xs p-2.5 rounded-xl bg-rose-950/50 text-rose-300";
+        fb.innerText = "Connection error.";
       }
     }
 
+    function populateAvailableReposPicker() {
+      const wrap = document.getElementById("available-repos-picker");
+      const sel = document.getElementById("available-repos-select");
+      if (!STATE.availableGitHubRepos.length) {
+        wrap.classList.add("hidden");
+        return;
+      }
+      wrap.classList.remove("hidden");
+      sel.innerHTML = `<option value="">-- Select from your GitHub repos --</option>`;
+      STATE.availableGitHubRepos.forEach(r => {
+        const opt = document.createElement("option");
+        opt.value = r.full_name;
+        opt.innerText = `${r.full_name} ${r.private ? '🔒' : '🌐'}`;
+        sel.appendChild(opt);
+      });
+    }
+
+    async function loadRepositories() {
+      try {
+        if (STATE.token) {
+          const r = await fetch(`${API_BASE}/repos`, { headers: authHeaders() });
+          if (r.ok) {
+            const d = await r.json();
+            if (d.repos && d.repos.length) {
+              STATE.repos = d.repos.map(x => ({
+                name: x.full_name,
+                sla: "P0",
+                desc: x.description || "Connected Enterprise Repository",
+                prsCount: "Live"
+              }));
+              STATE.activeRepo = STATE.repos[0].name;
+            }
+          }
+          const avail = await fetch(`${API_BASE}/repos/available`, { headers: authHeaders() });
+          if (avail.ok) {
+            const ad = await avail.json();
+            STATE.availableGitHubRepos = ad.repos || [];
+            populateAvailableReposPicker();
+          }
+        }
+        const ent = await fetch(`${API_BASE}/enterprise/repos`);
+        if (ent.ok) {
+          const ed = await ent.json();
+          const existing = new Set(STATE.repos.map(r => r.name));
+          (ed.repositories || []).forEach(r => {
+            if (!existing.has(r.full_name)) {
+              STATE.repos.push({
+                name: r.full_name,
+                sla: "P0",
+                desc: r.description || "GitHub Repository",
+                prsCount: "Live"
+              });
+            }
+          });
+        }
+      } catch {}
+      populateRepoSelectors();
+    }
+
+    function populateRepoSelectors() {
+      const sel = document.getElementById("active-repo-select");
+      sel.innerHTML = "";
+      STATE.repos.forEach(r => {
+        const opt = document.createElement("option");
+        opt.value = r.name;
+        opt.innerText = `${r.name} [${r.sla}]`;
+        if (r.name === STATE.activeRepo) opt.selected = true;
+        sel.appendChild(opt);
+      });
+      renderRepoGrid();
+    }
+
+    function renderRepoGrid() {
+      const grid = document.getElementById("repo-cards-grid");
+      if (!grid) return;
+      grid.innerHTML = "";
+      STATE.repos.forEach(r => {
+        const card = document.createElement("div");
+        card.className = "p-5 rounded-2xl bg-space-950/80 border border-slate-800 space-y-3";
+        card.innerHTML = `
+          <div class="flex items-center justify-between gap-2">
+            <span class="font-bold text-sm text-white font-mono truncate">${r.name}</span>
+            <span class="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-rose-500/10 text-rose-400 border border-rose-500/25">${r.sla}</span>
+          </div>
+          <p class="text-xs text-slate-400 line-clamp-2">${r.desc}</p>
+          <div class="flex items-center justify-between pt-2 border-t border-slate-800/80 text-xs">
+            <span class="text-emerald-400">● Guarded</span>
+            <button onclick="selectRepoFromGrid('${r.name}')" class="text-indigo-400 hover:text-indigo-300 font-bold">Inspect PRs →</button>
+          </div>
+        `;
+        grid.appendChild(card);
+      });
+    }
+
+    function selectRepoFromGrid(name) {
+      STATE.activeRepo = name;
+      populateRepoSelectors();
+      switchTab("prs");
+      loadPullRequests();
+    }
+
+    function onRepoChanged() {
+      STATE.activeRepo = document.getElementById("active-repo-select").value;
+      loadPullRequests();
+    }
+
+    function openAddRepoModal() { document.getElementById("modal-add-repo").classList.remove("hidden"); }
+    function closeAddRepoModal() { document.getElementById("modal-add-repo").classList.add("hidden"); }
+
+    async function submitNewRepo() {
+      const full = document.getElementById("new-repo-input").value.trim();
+      const sla = document.getElementById("new-repo-sla").value;
+      if (!full || !full.includes("/")) return alert("Enter valid owner/repo format");
+      const [owner, repo] = full.split("/");
+
+      if (STATE.token && STATE.user?.github_connected) {
+        try {
+          const res = await fetch(`${API_BASE}/repos/connect`, {
+            method: "POST",
+            headers: authHeaders(),
+            body: JSON.stringify({ owner, repo })
+          });
+          if (!res.ok) {
+            const err = await res.json();
+            showToast(err.detail || "Could not connect repo on GitHub", true);
+          }
+        } catch {}
+      }
+
+      if (!STATE.repos.find(r => r.name === full)) {
+        STATE.repos.unshift({ name: full, sla, desc: "Guarded Enterprise Repository", prsCount: "Live" });
+      }
+      STATE.activeRepo = full;
+      populateRepoSelectors();
+      closeAddRepoModal();
+      showToast(`✓ Linked repository: ${full}`);
+      loadPullRequests();
+    }
+
     // -------------------------------------------------------------------------
-    // PR Cards List Render
+    // Pull Requests & Assessments (Real Backend Integration)
+    // -------------------------------------------------------------------------
+    async function loadPullRequests() {
+      const [owner, repo] = STATE.activeRepo.split("/");
+      document.getElementById("pr-queue-status").innerText = "Syncing...";
+      let loaded = [];
+
+      try {
+        // Prefer per-user authenticated endpoint if GitHub connected
+        const url = (STATE.token && STATE.user?.github_connected)
+          ? `${API_BASE}/repos/${owner}/${repo}/pulls`
+          : `${API_BASE}/enterprise/repos/${owner}/${repo}/pulls`;
+
+        const r = await fetch(url, { headers: authHeaders() });
+        if (r.ok) {
+          const d = await r.json();
+          loaded = (d.pulls || []).map(normalizePR);
+        }
+      } catch {}
+
+      // Also pull historical assessments from MongoDB if open PRs list is empty
+      if (loaded.length === 0) {
+        try {
+          const ar = await fetch(`${API_BASE}/assessments/?limit=15`);
+          if (ar.ok) {
+            const ad = await ar.json();
+            loaded = (ad.results || []).map(doc => {
+              const agent = doc.agent_assessment || {};
+              const blast = doc.blast_radius || {};
+              const riskLevel = doc.risk_level || agent.risk_level || "PASS";
+              const score = agent.risk_score ?? (riskLevel === "BLOCK" ? 85 : riskLevel === "WARN" ? 50 : 20);
+              return {
+                pr_number: doc.pr_number,
+                title: doc.pr_title || `PR #${doc.pr_number}`,
+                author: doc.pr_author || "developer",
+                branch: doc.head_branch || "feature",
+                base_branch: doc.base_branch || "main",
+                additions: doc.total_lines_added || 0,
+                deletions: doc.total_lines_deleted || 0,
+                changed_files: doc.total_files_changed || 1,
+                risk_level: riskLevel,
+                risk_score: score,
+                decision: riskLevel,
+                blast_radius: {
+                  affected_services: blast.affected_services || [repo],
+                  max_sla_tier: blast.max_sla_tier || "P1",
+                  total_downstream: (blast.affected_services || []).length
+                },
+                ast_summary: { breaking_changes: doc.breaking_changes_count || 0, schema_changes: false },
+                plain_explanation: agent.executive_summary || "Analyzed by DeployGuard AI AST & Blast Radius Engine.",
+                rationale: agent.detailed_rationale || "Stored in MongoDB risk_assessments collection."
+              };
+            });
+          }
+        } catch {}
+      }
+
+      STATE.prs = loaded.length ? loaded : FALLBACK_PRS;
+      STATE.selectedPRIndex = 0;
+      document.getElementById("pr-queue-status").innerText = loaded.length ? "Live Synced" : "Demo Snapshot";
+      renderPRCards();
+      renderPRDetails();
+    }
+
+    function normalizePR(pr) {
+      const risk = (pr.risk_level && pr.risk_level !== "UNKNOWN" && pr.risk_level !== "PENDING") ? pr.risk_level : "PENDING";
+      const score = pr.risk_score ?? (risk === "BLOCK" ? 85 : risk === "WARN" ? 52 : risk === "PASS" ? 18 : 0);
+      const blast = pr.blast_radius || {};
+      const svcs = blast.affected_services || [STATE.activeRepo.split("/")[1]];
+      return {
+        pr_number: pr.pr_number,
+        title: pr.title,
+        author: pr.author || "dev",
+        branch: pr.branch || "feature",
+        base_branch: pr.base_branch || "main",
+        additions: pr.additions || 0,
+        deletions: pr.deletions || 0,
+        changed_files: pr.changed_files || 1,
+        risk_level: risk,
+        risk_score: score,
+        decision: pr.decision || risk,
+        blast_radius: {
+          affected_services: svcs,
+          max_sla_tier: blast.max_sla_tier || "P1",
+          total_downstream: svcs.length
+        },
+        ast_summary: { breaking_changes: 0, schema_changes: false },
+        plain_explanation: risk === "PENDING"
+          ? "Not scanned yet. Click 'Scan PR Now' to run live AST & Blast Radius analysis."
+          : `DeployGuard evaluated this PR as ${risk} (Score: ${score}/100).`,
+        rationale: pr.rationale || `Affects ${svcs.length} downstream service(s) with max SLA tier ${blast.max_sla_tier || 'P1'}.`
+      };
+    }
+
+    // -------------------------------------------------------------------------
+    // Render PR Cards & Details
     // -------------------------------------------------------------------------
     function renderPRCards() {
       const container = document.getElementById("pr-cards-list");
       container.innerHTML = "";
-
-      let countPass = 0, countWarn = 0, countBlock = 0;
+      let p = 0, w = 0, b = 0;
 
       STATE.prs.forEach((pr, i) => {
-        if (pr.risk_level === "PASS") countPass++;
-        if (pr.risk_level === "WARN") countWarn++;
-        if (pr.risk_level === "BLOCK") countBlock++;
+        if (pr.risk_level === "PASS") p++;
+        else if (pr.risk_level === "WARN") w++;
+        else if (pr.risk_level === "BLOCK") b++;
 
         const isSelected = i === STATE.selectedPRIndex;
-        const badgeCls = pr.risk_level === "PASS" ? "badge-pass" : pr.risk_level === "WARN" ? "badge-warn" : "badge-block";
-        const icon = pr.risk_level === "PASS" ? "✓" : pr.risk_level === "WARN" ? "⚠️" : "🚫";
+        const badgeCls = pr.risk_level === "PASS" ? "badge-pass"
+          : pr.risk_level === "WARN" ? "badge-warn"
+          : pr.risk_level === "BLOCK" ? "badge-block" : "badge-pending";
+        const icon = pr.risk_level === "PASS" ? "✓" : pr.risk_level === "WARN" ? "⚠️" : pr.risk_level === "BLOCK" ? "🚫" : "⏳";
 
         const card = document.createElement("div");
         card.className = `p-4 rounded-2xl border transition-all cursor-pointer ${
-          isSelected 
-            ? "bg-space-900 border-indigo-500 shadow-xl shadow-indigo-500/10" 
+          isSelected
+            ? "bg-space-900 border-indigo-500 shadow-xl shadow-indigo-500/10"
             : "bg-space-950/60 border-slate-800/80 hover:bg-space-900 hover:border-slate-700"
         }`;
-        card.onclick = () => {
-          STATE.selectedPRIndex = i;
-          renderPRCards();
-          renderPRDetails();
-        };
-
+        card.onclick = () => { STATE.selectedPRIndex = i; renderPRCards(); renderPRDetails(); };
         card.innerHTML = `
           <div class="flex items-start justify-between gap-2">
             <span class="text-xs font-bold text-white leading-snug line-clamp-2">#${pr.pr_number} ${pr.title}</span>
-            <span class="text-[10px] font-extrabold px-2.5 py-0.5 rounded-full shrink-0 ${badgeCls}">
-              ${icon} ${pr.risk_level}
-            </span>
+            <span class="text-[10px] font-extrabold px-2.5 py-0.5 rounded-full shrink-0 ${badgeCls}">${icon} ${pr.risk_level}</span>
           </div>
           <p class="text-[11px] text-slate-400 mt-1 line-clamp-1">${pr.plain_explanation}</p>
           <div class="flex items-center justify-between mt-3 text-[11px] text-slate-500 font-mono">
@@ -934,26 +1068,24 @@
         container.appendChild(card);
       });
 
-      // Update KPI counters
       document.getElementById("kpi-total").innerText = STATE.prs.length;
-      document.getElementById("kpi-pass").innerText = countPass;
-      document.getElementById("kpi-warn").innerText = countWarn;
-      document.getElementById("kpi-block").innerText = countBlock;
+      document.getElementById("kpi-pass").innerText = p;
+      document.getElementById("kpi-warn").innerText = w;
+      document.getElementById("kpi-block").innerText = b;
     }
 
-    // -------------------------------------------------------------------------
-    // Deep PR Details Render
-    // -------------------------------------------------------------------------
     function renderPRDetails() {
       const pr = STATE.prs[STATE.selectedPRIndex] || STATE.prs[0];
       const container = document.getElementById("pr-detail-deck");
+      if (!pr) return;
 
-      const badgeCls = pr.risk_level === "PASS" ? "badge-pass" : pr.risk_level === "WARN" ? "badge-warn" : "badge-block";
-      const icon = pr.risk_level === "PASS" ? "✓" : pr.risk_level === "WARN" ? "⚠️" : "🚫";
+      const badgeCls = pr.risk_level === "PASS" ? "badge-pass"
+        : pr.risk_level === "WARN" ? "badge-warn"
+        : pr.risk_level === "BLOCK" ? "badge-block" : "badge-pending";
+      const icon = pr.risk_level === "PASS" ? "✓" : pr.risk_level === "WARN" ? "⚠️" : pr.risk_level === "BLOCK" ? "🚫" : "⏳";
       const gaugeColor = pr.risk_score <= 35 ? "#34d399" : pr.risk_score <= 65 ? "#fbbf24" : "#f87171";
 
       container.innerHTML = `
-        <!-- Top Title & Badge -->
         <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/5 pb-4">
           <div>
             <div class="flex items-center space-x-2">
@@ -963,16 +1095,10 @@
             </div>
             <h2 class="text-base font-extrabold text-white mt-1">${pr.title}</h2>
           </div>
-          <div class="shrink-0">
-            <span class="text-sm font-extrabold px-3.5 py-1.5 rounded-full ${badgeCls}">
-              ${icon} ${pr.decision}
-            </span>
-          </div>
+          <span class="text-sm font-extrabold px-3.5 py-1.5 rounded-full shrink-0 ${badgeCls}">${icon} ${pr.decision}</span>
         </div>
 
-        <!-- 3 Visual Metric Cards -->
         <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <!-- Score -->
           <div class="p-4 rounded-2xl bg-space-950/80 border border-slate-800 text-center flex flex-col items-center justify-center">
             <span class="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider">Composite Risk</span>
             <div class="my-1.5 flex items-baseline">
@@ -980,43 +1106,37 @@
               <span class="text-xs text-slate-500 font-mono ml-1">/ 100</span>
             </div>
             <span class="text-[11px] font-medium ${pr.risk_score <= 35 ? 'text-emerald-400' : 'text-rose-400'}">
-              ${pr.risk_score <= 35 ? '✓ Meets Auto-Merge Criteria' : '✗ Exceeds Threshold (35)'}
+              ${pr.risk_score <= 35 ? '✓ Safe Threshold (≤35)' : '✗ Exceeds Threshold'}
             </span>
           </div>
 
-          <!-- Blast Radius -->
           <div class="p-4 rounded-2xl bg-space-950/80 border border-slate-800">
-            <span class="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider">Blast Radius Impact</span>
-            <p class="text-xl font-black text-white mt-1.5">${pr.blast_radius.total_downstream} Microservices</p>
-            <p class="text-xs text-rose-400 font-bold mt-0.5">Highest SLA: ${pr.blast_radius.max_sla_tier}</p>
+            <span class="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider">Blast Radius</span>
+            <p class="text-xl font-black text-white mt-1.5">${pr.blast_radius.total_downstream} Services</p>
+            <p class="text-xs text-rose-400 font-bold mt-0.5">Max SLA: ${pr.blast_radius.max_sla_tier}</p>
             <p class="text-[10px] text-slate-500 truncate mt-1">${pr.blast_radius.affected_services.join(', ')}</p>
           </div>
 
-          <!-- AST Delta -->
           <div class="p-4 rounded-2xl bg-space-950/80 border border-slate-800">
-            <span class="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider">AST Syntax Delta</span>
+            <span class="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider">AST & Diff Delta</span>
             <p class="text-xs font-mono text-slate-300 mt-2">Diff: <span class="text-emerald-400 font-bold">+${pr.additions}</span> <span class="text-rose-400 font-bold">-${pr.deletions}</span></p>
             <p class="text-xs text-slate-400 mt-1">Breaking APIs: <strong class="${pr.ast_summary.breaking_changes > 0 ? 'text-rose-400' : 'text-slate-200'}">${pr.ast_summary.breaking_changes}</strong></p>
-            <p class="text-[10px] text-slate-500 mt-1">${pr.ast_summary.schema_changes ? '⚠️ Schema altered' : '✓ No DB schema changes'}</p>
+            <p class="text-[10px] text-slate-500 mt-1">Files changed: ${pr.changed_files}</p>
           </div>
         </div>
 
-        <!-- Plain English Explanation Card (No Jargon) -->
         <div class="p-4 rounded-2xl ${pr.risk_level === 'BLOCK' ? 'bg-rose-950/20 border border-rose-500/30' : 'bg-indigo-950/20 border border-indigo-500/20'} space-y-1.5">
-          <span class="text-xs font-bold ${pr.risk_level === 'BLOCK' ? 'text-rose-400' : 'text-indigo-300'} uppercase tracking-wider flex items-center space-x-1.5">
-            <span>🛡️ Why DeployGuard Recommends This:</span>
-          </span>
+          <span class="text-xs font-bold ${pr.risk_level === 'BLOCK' ? 'text-rose-400' : 'text-indigo-300'} uppercase tracking-wider">🛡️ DeployGuard Guard Analysis</span>
           <p class="text-xs text-slate-300 leading-relaxed font-medium">${pr.plain_explanation}</p>
           <p class="text-[11px] text-slate-400 leading-relaxed pt-1 border-t border-white/5">${pr.rationale}</p>
         </div>
 
-        <!-- Bottom Action Bar -->
         <div class="pt-2 flex flex-col sm:flex-row items-center justify-between gap-3 border-t border-white/5">
           <div class="flex items-center space-x-2 text-xs">
-            <button onclick="rescanActivePR()" class="px-3.5 py-2 rounded-xl bg-space-850 hover:bg-space-800 text-slate-300 border border-slate-700 transition font-semibold">
-              🔍 Re-Scan Diff
+            <button onclick="rescanActivePR()" class="px-3.5 py-2 rounded-xl bg-space-850 hover:bg-space-800 text-indigo-300 border border-indigo-500/30 transition font-semibold">
+              🔍 Scan PR Live
             </button>
-            <a href="https://github.com/chandanknayak/deployguard-ai/pull/${pr.pr_number}" target="_blank" class="px-3.5 py-2 rounded-xl bg-space-850 hover:bg-space-800 text-slate-300 border border-slate-700 transition font-semibold">
+            <a href="https://github.com/${STATE.activeRepo}/pull/${pr.pr_number}" target="_blank" class="px-3.5 py-2 rounded-xl bg-space-850 hover:bg-space-800 text-slate-300 border border-slate-700 transition font-semibold">
               ↗ GitHub PR
             </a>
           </div>
@@ -1024,11 +1144,11 @@
           <div class="flex items-center space-x-3 w-full sm:w-auto justify-end">
             ${
               pr.risk_level === 'BLOCK'
-                ? `<button onclick="triggerActivePRMerge(true)" class="px-4 py-2.5 rounded-xl text-xs font-extrabold bg-rose-600/30 hover:bg-rose-600/50 border border-rose-500 text-rose-200 transition shadow-lg shadow-rose-600/10">
-                     ⚠️ Request Admin Override Merge
+                ? `<button onclick="triggerActivePRMerge(true)" class="px-4 py-2.5 rounded-xl text-xs font-extrabold bg-rose-600/30 hover:bg-rose-600/50 border border-rose-500 text-rose-200 transition">
+                     ⚠️ Admin Override Merge
                    </button>`
-                : `<button onclick="triggerActivePRMerge(false)" class="px-5 py-2.5 rounded-xl text-xs font-extrabold bg-emerald-600 hover:bg-emerald-500 text-white shadow-xl shadow-emerald-600/25 transition flex items-center space-x-2">
-                     <span>✓ Merge Pull Request (Safe)</span>
+                : `<button onclick="triggerActivePRMerge(false)" class="px-5 py-2.5 rounded-xl text-xs font-extrabold bg-emerald-600 hover:bg-emerald-500 text-white shadow-xl shadow-emerald-600/25 transition">
+                     ✓ Merge Pull Request
                    </button>`
             }
           </div>
@@ -1037,224 +1157,284 @@
     }
 
     // -------------------------------------------------------------------------
-    // Vis.js Blast Radius Network Graph
+    // Real Backend Actions: Analyze, Merge, Canary Deploy, Policy, Audit
     // -------------------------------------------------------------------------
-    function renderBlastNetwork() {
-      const canvas = document.getElementById("blast-network-canvas");
-      if (!canvas) return;
-
-      const nodes = new vis.DataSet([
-        { id: 1, label: "PR Code Change\n(feat-retry)", color: "#6366f1", shape: "box", font: { color: "white", face: "Inter" } },
-        { id: 2, label: "deployguard-ai\n(Root Repo)", color: "#1e293b", shape: "box", font: { color: "white", face: "Inter" } },
-        { id: 3, label: "auth-service\n[P0 Critical SLA]", color: "#f43f5e", shape: "box", font: { color: "white", face: "Inter" } },
-        { id: 4, label: "payment-service\n[P0 Critical SLA]", color: "#f43f5e", shape: "box", font: { color: "white", face: "Inter" } },
-        { id: 5, label: "notification-service\n[P1 High SLA]", color: "#f59e0b", shape: "box", font: { color: "white", face: "Inter" } },
-        { id: 6, label: "billing-worker\n[P0 Core]", color: "#f43f5e", shape: "box", font: { color: "white", face: "Inter" } },
-      ]);
-
-      const edges = new vis.DataSet([
-        { from: 1, to: 2, arrows: "to", color: "#6366f1", width: 2.5 },
-        { from: 2, to: 3, arrows: "to", color: "#94a3b8" },
-        { from: 2, to: 4, arrows: "to", color: "#94a3b8" },
-        { from: 2, to: 5, arrows: "to", color: "#94a3b8" },
-        { from: 4, to: 6, arrows: "to", color: "#f43f5e", width: 1.5, dashes: true },
-      ]);
-
-      const data = { nodes, edges };
-      const options = {
-        physics: { stabilization: true },
-        nodes: { margin: 12, shadow: true },
-        edges: { smooth: true }
-      };
-
-      if (visNetwork) visNetwork.destroy();
-      visNetwork = new vis.Network(canvas, data, options);
-    }
-
-    // -------------------------------------------------------------------------
-    // Actions & Simulators
-    // -------------------------------------------------------------------------
-    function triggerActivePRMerge(isOverride) {
+    async function rescanActivePR() {
       const pr = STATE.prs[STATE.selectedPRIndex];
-      if (isOverride) {
-        const reason = prompt(`CRITICAL: PR #${pr.pr_number} has risk score ${pr.risk_score} (BLOCK). Enter mandatory written justification for emergency override:`);
-        if (!reason) return;
-        showToast(`✓ Admin emergency override approved. Merging PR #${pr.pr_number}...`);
-      } else {
-        showToast(`✓ Verifying zero-breaking changes and executing merge for PR #${pr.pr_number}...`);
+      if (!pr) return;
+      const [owner, repo] = STATE.activeRepo.split("/");
+      showToast(`⏳ Running live AST + Blast Radius scan on ${STATE.activeRepo}#${pr.pr_number}...`);
+
+      const out = document.getElementById("test-output-log");
+      if (out) {
+        out.classList.remove("hidden");
+        out.innerText = `Calling POST /enterprise/repos/${owner}/${repo}/pulls/${pr.pr_number}/analyze ...`;
       }
 
-      setTimeout(() => {
-        showToast(`✓ PR #${pr.pr_number} successfully merged into branch ${pr.base_branch}!`);
-        // Append to audit terminal
-        const term = document.getElementById("live-audit-terminal");
-        if (term) {
-          const p = document.createElement("p");
-          p.className = "text-emerald-400";
-          p.innerText = `[${new Date().toISOString()}] PR #${pr.pr_number} merged by ${STATE.currentUser.email}. Override: ${isOverride}`;
-          term.appendChild(p);
+      try {
+        const res = await fetch(`${API_BASE}/enterprise/repos/${owner}/${repo}/pulls/${pr.pr_number}/analyze`, {
+          method: "POST",
+          headers: authHeaders()
+        });
+        const data = await res.json();
+        if (res.ok) {
+          pr.risk_level = data.risk_level || "PASS";
+          pr.decision = data.risk_level || "PASS";
+          pr.risk_score = data.risk_score ?? pr.risk_score;
+          pr.blast_radius = {
+            affected_services: data.affected_services || [repo],
+            max_sla_tier: data.max_sla_tier || "P1",
+            total_downstream: (data.affected_services || [repo]).length
+          };
+          pr.ast_summary.breaking_changes = data.breaking_changes || 0;
+          pr.plain_explanation = data.summary || `Live scan complete: ${pr.risk_level} (Score ${pr.risk_score}/100)`;
+          renderPRCards();
+          renderPRDetails();
+          if (out) {
+            out.innerText = `✓ Live scan finished!\nDecision: ${pr.risk_level} | Risk Score: ${pr.risk_score}/100\nBreaking changes: ${pr.ast_summary.breaking_changes}\nImpacted services: ${pr.blast_radius.affected_services.join(", ")}`;
+          }
+          showToast(`✓ PR #${pr.pr_number} analyzed live! Risk: ${pr.risk_score} (${pr.risk_level})`);
+          return;
         }
-      }, 1400);
+      } catch {}
+      showToast(`Scan fallback completed for PR #${pr.pr_number}.`);
     }
 
-    function runTestSuite() {
-      const btn = document.getElementById("btn-run-tests");
-      const out = document.getElementById("test-output-log");
-      btn.innerText = "⏳ Running AST & Regression Tests...";
-      out.classList.remove("hidden");
-      out.innerText = "Executing pytest & AST syntax validation...\nScanning modified functions in diff...";
+    async function triggerActivePRMerge(isOverride) {
+      const pr = STATE.prs[STATE.selectedPRIndex];
+      if (!pr) return;
+      const [owner, repo] = STATE.activeRepo.split("/");
+      let overrideReason = "";
+      if (isOverride) {
+        overrideReason = prompt(`PR #${pr.pr_number} has risk ${pr.risk_score}. Enter mandatory justification for override:`);
+        if (!overrideReason) return;
+      }
 
-      setTimeout(() => {
-        out.innerText = "✓ 67 unit & contract tests passed in 1.41s\n✓ AST syntax tree validation: ZERO breaking signatures\n✓ DB schema changes: None\nSTATUS: GREEN (Ready for release)";
-        btn.innerText = "✓ All 67 Tests Passed";
-        showToast("✓ Automated pre-deploy test suite passed with 100% success.");
-      }, 1600);
+      showToast(`Executing merge gate on ${STATE.activeRepo}#${pr.pr_number}...`);
+      try {
+        const res = await fetch(`${API_BASE}/enterprise/repos/${owner}/${repo}/pulls/${pr.pr_number}/merge`, {
+          method: "POST",
+          headers: authHeaders(),
+          body: JSON.stringify({
+            merge_method: "merge",
+            admin_override: isOverride,
+            override_reason: overrideReason,
+            operator: STATE.user?.email || "enterprise-lead"
+          })
+        });
+        const data = await res.json();
+        if (res.status === 403) {
+          showToast(`🚫 MERGE BLOCKED: ${data.detail?.reason || "Risk threshold exceeded. Enable Admin Override to proceed."}`, true);
+          return;
+        }
+        if (!res.ok) {
+          showToast(`⚠️ Merge status: ${data.detail || data.message || "Could not merge on GitHub"}`, true);
+          return;
+        }
+        showToast(`✓ PR #${pr.pr_number} merged cleanly on GitHub!`);
+        await loadAuditLogs();
+      } catch {
+        showToast("Network error during merge request.", true);
+      }
     }
 
-    function triggerCanaryRollout() {
+    async function triggerCanaryRollout() {
+      const pr = STATE.prs[STATE.selectedPRIndex];
+      const [owner, repo] = STATE.activeRepo.split("/");
       const btn = document.getElementById("btn-canary");
       const fb = document.getElementById("canary-feedback-text");
       btn.innerText = "⏳ Deploying 10% Canary...";
 
-      setTimeout(() => {
-        btn.innerText = "🚀 Canary Deployed (10% Traffic)";
-        fb.innerText = "Canary live on 10% traffic. Zero error anomalies detected.";
-        fb.className = "text-[11px] text-emerald-400 text-center font-bold";
-        showToast("🚀 10% Canary progressive deployment activated.");
-      }, 1800);
+      try {
+        const res = await fetch(`${API_BASE}/enterprise/repos/${owner}/${repo}/deploy`, {
+          method: "POST",
+          headers: authHeaders(),
+          body: JSON.stringify({
+            environment: "staging",
+            strategy: "CANARY",
+            traffic_percent: 10,
+            pr_number: pr?.pr_number || 1,
+            operator: STATE.user?.email || "enterprise-lead"
+          })
+        });
+        const data = await res.json();
+        if (res.ok) {
+          btn.innerText = `🚀 Canary Live (${data.deployment.deployment_id})`;
+          fb.innerText = `Status: ${data.deployment.status} · Latency p95: ${data.deployment.latency_p95_ms}ms · Error rate: ${data.deployment.error_rate}`;
+          fb.className = "text-[11px] text-emerald-400 text-center font-bold";
+          showToast(`🚀 Canary ${data.deployment.deployment_id} deployed to staging!`);
+          await loadAuditLogs();
+          return;
+        }
+      } catch {}
+      btn.innerText = "🚀 Deploy 10% Canary";
+    }
+
+    async function loadAuditLogs() {
+      const term = document.getElementById("live-audit-terminal");
+      if (!term) return;
+      try {
+        const res = await fetch(`${API_BASE}/enterprise/audit?limit=15`);
+        if (res.ok) {
+          const data = await res.json();
+          const logs = data.logs || [];
+          if (logs.length) {
+            term.innerHTML = logs.map(l => {
+              const ts = (l.timestamp || "").slice(0, 19).replace("T", " ");
+              const act = l.action || l.strategy || "EVENT";
+              const msg = l.deployment_id
+                ? `[${ts}] DEPLOY ${l.deployment_id} · ${l.repo} (${l.environment} ${l.traffic_percent}%) · Status: ${l.status}`
+                : `[${ts}] ${act.toUpperCase()} · ${l.repo || ""} PR #${l.pr_number || "?"} by ${l.merged_by || l.operator || "system"}`;
+              return `<p class="text-emerald-400/90">${msg}</p>`;
+            }).join("");
+            return;
+          }
+        }
+      } catch {}
+      term.innerHTML = `<p class="text-slate-500">[System] Ready. Merge or deploy actions will appear here in real time from MongoDB.</p>`;
+    }
+
+    async function loadGovernancePolicy() {
+      try {
+        const res = await fetch(`${API_BASE}/enterprise/policy`);
+        if (res.ok) {
+          const p = await res.json();
+          document.getElementById("pol-org-name").value = p.organization_name || "DeployGuard Enterprise";
+          document.getElementById("input-policy-score").value = p.max_auto_merge_score ?? 35;
+          document.getElementById("label-policy-score").innerText = `${p.max_auto_merge_score ?? 35} / 100`;
+          document.getElementById("pol-p0").checked = !!p.block_on_p0_sla;
+          document.getElementById("pol-breaking").checked = !!p.block_on_api_changes;
+          document.getElementById("pol-canary").checked = !!p.require_canary_for_medium_risk;
+        }
+      } catch {}
+    }
+
+    async function saveGovernancePolicy() {
+      const payload = {
+        organization_name: document.getElementById("pol-org-name").value.trim() || "DeployGuard Enterprise",
+        max_auto_merge_score: parseInt(document.getElementById("input-policy-score").value, 10),
+        block_on_p0_sla: document.getElementById("pol-p0").checked,
+        block_on_api_changes: document.getElementById("pol-breaking").checked,
+        require_canary_for_medium_risk: document.getElementById("pol-canary").checked,
+        enforce_branch_protection: true
+      };
+      try {
+        const res = await fetch(`${API_BASE}/enterprise/policy`, {
+          method: "POST",
+          headers: authHeaders(),
+          body: JSON.stringify(payload)
+        });
+        if (res.ok) {
+          const fb = document.getElementById("policy-feedback");
+          fb.classList.remove("hidden");
+          setTimeout(() => fb.classList.add("hidden"), 3000);
+          showToast("✓ Governance policy persisted to MongoDB Atlas!");
+        }
+      } catch {
+        showToast("Failed to save policy", true);
+      }
+    }
+
+    // -------------------------------------------------------------------------
+    // Dynamic Blast Radius Graph (Uses selected PR's affected services!)
+    // -------------------------------------------------------------------------
+    function renderBlastNetwork() {
+      const canvas = document.getElementById("blast-network-canvas");
+      if (!canvas || typeof vis === "undefined") return;
+      const pr = STATE.prs[STATE.selectedPRIndex] || STATE.prs[0];
+      const rootSvc = STATE.activeRepo.split("/")[1] || "deployguard-ai";
+      const svcs = pr?.blast_radius?.affected_services || ["auth-service", "payment-service", "notification-service"];
+
+      const nodesArr = [
+        { id: 1, label: `PR #${pr?.pr_number || 1}\n(${pr?.branch || 'diff'})`, color: "#6366f1", shape: "box", font: { color: "white" } },
+        { id: 2, label: `${rootSvc}\n(Modified Root)`, color: "#1e293b", shape: "box", font: { color: "white" } }
+      ];
+      const edgesArr = [{ from: 1, to: 2, arrows: "to", color: "#6366f1", width: 2.5 }];
+
+      svcs.forEach((svc, idx) => {
+        if (svc === rootSvc && svcs.length > 1) return;
+        const nid = idx + 3;
+        const isP0 = svc.includes("auth") || svc.includes("payment") || pr?.blast_radius?.max_sla_tier === "P0";
+        nodesArr.push({
+          id: nid,
+          label: `${svc}\n[${isP0 ? "P0 Critical" : "P1 High"}]`,
+          color: isP0 ? "#f43f5e" : "#f59e0b",
+          shape: "box",
+          font: { color: "white" }
+        });
+        edgesArr.push({ from: 2, to: nid, arrows: "to", color: isP0 ? "#f43f5e" : "#94a3b8" });
+      });
+
+      if (visNetwork) visNetwork.destroy();
+      visNetwork = new vis.Network(canvas, {
+        nodes: new vis.DataSet(nodesArr),
+        edges: new vis.DataSet(edgesArr)
+      }, { physics: { stabilization: true }, nodes: { margin: 12, shadow: true }, edges: { smooth: true } });
+
+      const cards = document.getElementById("blast-service-cards");
+      cards.innerHTML = svcs.map(s => `
+        <div class="p-4 rounded-2xl bg-space-950/60 border border-slate-800 space-y-1">
+          <span class="text-[10px] font-bold text-slate-400 uppercase">Downstream Impact</span>
+          <p class="text-sm font-bold text-white font-mono">${s}</p>
+          <p class="text-xs text-slate-400">SLA Tier: ${pr?.blast_radius?.max_sla_tier || "P1"}</p>
+        </div>
+      `).join("");
+    }
+
+    function switchTab(tabKey) {
+      ["prs", "blast", "release", "repos", "policy"].forEach(k => {
+        document.getElementById(`tab-${k}`).classList.toggle("hidden", k !== tabKey);
+        const btn = document.getElementById(`nav-btn-${k}`);
+        if (btn) {
+          btn.className = k === tabKey
+            ? "px-3.5 py-1.5 rounded-lg font-semibold transition bg-indigo-600 text-white shadow-sm"
+            : "px-3.5 py-1.5 rounded-lg font-semibold transition text-slate-400 hover:text-white hover:bg-space-800";
+        }
+      });
+      if (tabKey === "blast") setTimeout(renderBlastNetwork, 60);
+      if (tabKey === "release") loadAuditLogs();
     }
 
     function triggerWebhookSimulation() {
-      showToast("⚡ Simulating incoming GitHub PR webhook event (#4)...");
-      setTimeout(() => {
-        STATE.prs.unshift({
-          pr_number: STATE.prs.length + 1,
-          title: "feat(auth): Add multi-tenant organization support",
-          author: "priya-arch",
-          branch: "feat-multi-tenant",
-          base_branch: "main",
-          additions: 180,
-          deletions: 12,
-          changed_files: 4,
-          risk_level: "PASS",
-          risk_score: 22,
-          decision: "PASS",
-          blast_radius: {
-            affected_services: ["auth-service", "tenant-db"],
-            max_sla_tier: "P1",
-            total_downstream: 2
-          },
-          ast_summary: {
-            breaking_changes: 0,
-            added_classes: ["TenantContextManager"],
-            added_functions: ["resolve_tenant_id"],
-            schema_changes: false
-          },
-          plain_explanation: "New multi-tenant context manager added with full backward compatibility. Safe to merge.",
-          rationale: "Pure additive multi-tenant resolution logic. Verified backwards compatibility with legacy session tokens."
-        });
-        STATE.selectedPRIndex = 0;
-        renderPRCards();
-        renderPRDetails();
-        showToast("✓ Incoming PR #4 scanned! Risk Score: 22 (PASS).");
-      }, 1200);
-    }
-
-    function rescanActivePR() {
-      const pr = STATE.prs[STATE.selectedPRIndex];
-      showToast(`Re-scanning diff and recalculating AST tree for PR #${pr.pr_number}...`);
-      setTimeout(() => {
-        showToast(`✓ PR #${pr.pr_number} re-scanned. Composite risk confirmed: ${pr.risk_score} (${pr.decision}).`);
-      }, 1000);
-    }
-
-    function saveGovernancePolicy() {
-      const fb = document.getElementById("policy-feedback");
-      fb.classList.remove("hidden");
-      setTimeout(() => fb.classList.add("hidden"), 3000);
-      showToast("✓ Governance policy saved to MongoDB Atlas.");
-    }
-
-    function refreshDashboard() {
-      showToast("Refreshing live PR queue and microservice topology...");
-      checkCloudHealth();
+      STATE.prs.unshift({
+        pr_number: STATE.prs.length + 10,
+        title: "feat(payments): Remove deprecated Stripe v1 charge endpoints",
+        author: "sara-fintech",
+        branch: "drop-stripe-v1",
+        base_branch: "main",
+        additions: 45,
+        deletions: 480,
+        changed_files: 12,
+        risk_level: "BLOCK",
+        risk_score: 88,
+        decision: "BLOCK",
+        blast_radius: { affected_services: ["payment-service", "billing-worker", "auth-service"], max_sla_tier: "P0", total_downstream: 3 },
+        ast_summary: { breaking_changes: 5, schema_changes: true },
+        plain_explanation: "CRITICAL: Deletes 5 endpoints actively consumed by billing-worker. Merge blocked by policy!",
+        rationale: "Simulated high-risk webhook event demonstrating DeployGuard's P0 SLA hard block."
+      });
+      STATE.selectedPRIndex = 0;
       renderPRCards();
       renderPRDetails();
+      showToast("⚡ Simulated high-risk PR scanned -> BLOCKED (Score 88/100)");
     }
 
-    // -------------------------------------------------------------------------
-    // Repo Selector & Add Modal
-    // -------------------------------------------------------------------------
-    function populateRepoSelectors() {
-      const sel = document.getElementById("active-repo-select");
-      sel.innerHTML = "";
-      STATE.repos.forEach(r => {
-        const opt = document.createElement("option");
-        opt.value = r.name;
-        opt.innerText = `${r.name} [${r.sla}]`;
-        if (r.name === STATE.activeRepo) opt.selected = true;
-        sel.appendChild(opt);
-      });
-
-      renderRepoGrid();
+    async function refreshDashboard() {
+      await checkCloudHealth();
+      await loadPullRequests();
+      await loadAuditLogs();
+      showToast("✓ Synced live data from Render API + MongoDB + GitHub.");
     }
 
-    function renderRepoGrid() {
-      const grid = document.getElementById("repo-cards-grid");
-      if (!grid) return;
-      grid.innerHTML = "";
-
-      STATE.repos.forEach(r => {
-        const card = document.createElement("div");
-        card.className = "p-5 rounded-2xl bg-space-950/80 border border-slate-800 space-y-3";
-        card.innerHTML = `
-          <div class="flex items-center justify-between">
-            <span class="font-bold text-sm text-white font-mono">${r.name}</span>
-            <span class="text-[10px] font-extrabold px-2 py-0.5 rounded-full ${r.sla === 'P0' ? 'bg-rose-500/10 text-rose-400 border border-rose-500/25' : 'bg-amber-500/10 text-amber-400 border border-amber-500/25'}">${r.sla}</span>
-          </div>
-          <p class="text-xs text-slate-400">${r.desc}</p>
-          <div class="flex items-center justify-between pt-2 border-t border-slate-800/80 text-xs">
-            <span class="text-slate-500">Guarded by Webhook</span>
-            <span class="text-indigo-400 font-bold">${r.prsCount} Open PRs</span>
-          </div>
-        `;
-        grid.appendChild(card);
-      });
-    }
-
-    function onRepoChanged() {
-      const sel = document.getElementById("active-repo-select");
-      STATE.activeRepo = sel.value;
-      showToast(`Switched active repository to ${STATE.activeRepo}`);
-    }
-
-    function openAddRepoModal() {
-      document.getElementById("modal-add-repo").classList.remove("hidden");
-    }
-    function closeAddRepoModal() {
-      document.getElementById("modal-add-repo").classList.add("hidden");
-    }
-    function submitNewRepo() {
-      const inp = document.getElementById("new-repo-input").value.trim();
-      const sla = document.getElementById("new-repo-sla").value;
-      if (!inp) return alert("Please enter a valid owner/repo name");
-
-      STATE.repos.push({ name: inp, sla, desc: "Enterprise linked repository", prsCount: 0 });
-      STATE.activeRepo = inp;
-      populateRepoSelectors();
-      closeAddRepoModal();
-      showToast(`✓ Linked new repository: ${inp} [${sla}].`);
-    }
-
-    // -------------------------------------------------------------------------
-    // Toast Utility
-    // -------------------------------------------------------------------------
-    function showToast(msg) {
+    function showToast(msg, isError = false) {
       const banner = document.getElementById("toast-banner");
-      const txt = document.getElementById("toast-text");
-      txt.innerText = msg;
+      const box = document.getElementById("toast-box");
+      document.getElementById("toast-text").innerText = msg;
+      box.className = isError
+        ? "p-3 rounded-2xl bg-rose-950/90 border border-rose-500/40 text-xs text-rose-200 flex items-center justify-between shadow-xl"
+        : "p-3 rounded-2xl bg-indigo-950/90 border border-indigo-500/40 text-xs text-indigo-200 flex items-center justify-between shadow-xl";
       banner.classList.remove("hidden");
-      setTimeout(() => banner.classList.add("hidden"), 4000);
+      setTimeout(() => banner.classList.add("hidden"), 5000);
     }
   </script>
 </body>

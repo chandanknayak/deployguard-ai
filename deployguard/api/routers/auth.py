@@ -392,3 +392,66 @@ async def get_me(current_user: Annotated[dict, Depends(get_current_user)]):
         "plan": current_user.get("plan", "free"),
         "created_at": current_user.get("created_at", ""),
     }
+
+
+class ConnectGitHubRequest(BaseModel):
+    github_token: str = Field(min_length=10)
+
+
+@router.post("/connect-github", summary="Link GitHub account via Personal Access Token")
+async def connect_github_pat(
+    body: ConnectGitHubRequest,
+    request: Request,
+    current_user: Annotated[dict, Depends(get_current_user)],
+):
+    """Validate a GitHub PAT, fetch the GitHub username & repos, and link to user account."""
+    async with httpx.AsyncClient() as client:
+        r = await client.get(
+            "https://api.github.com/user",
+            headers={
+                "Authorization": f"token {body.github_token}",
+                "Accept": "application/vnd.github.v3+json",
+            },
+            timeout=15,
+        )
+        if r.status_code != 200:
+            raise HTTPException(status_code=400, detail="Invalid GitHub token or insufficient permissions")
+        gh_user = r.json()
+
+        repos_resp = await client.get(
+            "https://api.github.com/user/repos?sort=updated&per_page=25",
+            headers={
+                "Authorization": f"token {body.github_token}",
+                "Accept": "application/vnd.github.v3+json",
+            },
+            timeout=15,
+        )
+        available_repos = []
+        if repos_resp.status_code == 200:
+            for rp in repos_resp.json():
+                available_repos.append({
+                    "full_name": rp["full_name"],
+                    "owner": rp["owner"]["login"],
+                    "repo": rp["name"],
+                    "private": rp.get("private", False),
+                    "description": rp.get("description") or "",
+                    "language": rp.get("language") or "",
+                })
+
+    username = gh_user.get("login")
+    now = datetime.now(timezone.utc).isoformat()
+    col = _users_col(request)
+    await col.update_one(
+        {"email": current_user["email"]},
+        {"$set": {
+            "github_username": username,
+            "github_access_token": body.github_token,
+            "github_connected": True,
+            "updated_at": now,
+        }},
+    )
+    return {
+        "github_connected": True,
+        "github_username": username,
+        "available_repos": available_repos,
+    }

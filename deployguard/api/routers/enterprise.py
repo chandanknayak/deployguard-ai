@@ -460,3 +460,23 @@ async def trigger_deployment(
             {"step": "Live Telemetry & Error Anomaly Detection", "status": "HEALTHY", "duration_s": 5.0},
         ],
     }))
+
+
+@router.get("/audit", summary="Get recent audit & deployment logs")
+async def get_audit_logs(request: Request, limit: int = 20) -> JSONResponse:
+    """Return recent merge gates, overrides, and deployment records."""
+    db = _get_db(request)
+    logs: list[dict] = []
+    if db:
+        try:
+            async for doc in db.db["audit_log"].find().sort("timestamp", -1).limit(limit):
+                doc["_id"] = str(doc["_id"])
+                logs.append(doc)
+            async for doc in db.db["deployments"].find().sort("timestamp", -1).limit(limit):
+                doc["_id"] = str(doc["_id"])
+                doc.setdefault("action", f"deploy_{doc.get('strategy', 'CANARY').lower()}")
+                logs.append(doc)
+        except Exception as exc:
+            logger.warning("Failed to fetch audit logs: %s", exc)
+    logs.sort(key=lambda x: str(x.get("timestamp", "")), reverse=True)
+    return JSONResponse(jsonable_encoder({"logs": logs[:limit]}))
