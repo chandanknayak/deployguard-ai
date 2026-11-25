@@ -1,606 +1,497 @@
-import React, { useState, useEffect } from 'react';
-import { 
-  Shield, 
-  GitPullRequest, 
-  Network, 
-  Rocket, 
-  Settings, 
-  FolderGit2, 
-  CheckCircle2, 
-  AlertTriangle, 
-  XCircle, 
-  ExternalLink, 
-  RefreshCw, 
-  Plus, 
-  Check, 
-  Activity,
-  Server,
-  Lock,
-  ArrowRight
-} from 'lucide-react';
+import React, { useEffect, useMemo, useState } from "react";
 
-const API_BASE = import.meta.env.VITE_API_URL || 'https://deployguard-ai.onrender.com';
+const API_BASE =
+  import.meta.env.VITE_API_BASE_URL ||
+  import.meta.env.VITE_API_URL ||
+  "https://deployguard-ai.onrender.com";
 
-const INITIAL_PRS = [
+const DEMO_ASSESSMENTS = [
   {
-    pr_number: 1,
-    title: "feat(core): Add async exponential backoff retry utility",
-    author: "chandanknayak",
-    branch: "feat-retry",
-    base_branch: "main",
-    additions: 124,
-    deletions: 8,
-    changed_files: 3,
-    risk_level: "PASS",
-    risk_score: 18,
-    decision: "PASS",
-    blast_radius: {
-      affected_services: ["deployguard-ai", "notification-service"],
-      max_sla_tier: "P1",
-      total_downstream: 2
-    },
-    ast_summary: {
-      breaking_changes: 0,
-      added_classes: ["AsyncRetryPolicy"],
-      added_functions: ["with_exponential_backoff"],
-      schema_changes: false
-    },
-    rationale: "Additive change with zero breaking signatures. Comprehensive test coverage for exponential backoff."
+    id: "pr-418",
+    repo: "acme/payments-core",
+    prNumber: 418,
+    title: "Refactor ledger settlement lock & retry backoff",
+    author: "r.patel",
+    riskScore: 84,
+    gateStatus: "BLOCK",
+    blastRadiusHops: 4,
+    affectedServices: ["ledger-worker", "checkout-api", "webhook-dispatcher", "audit-sink"],
+    matchedIncidents: [
+      { id: "INC-209", title: "Redis lock contention during peak settlement", similarity: 0.92 },
+      { id: "INC-174", title: "Duplicate ledger debit on retry timeout", similarity: 0.85 },
+    ],
+    recommendation: "Hold merge. Add idempotency key guard on retry path and run canary on 5% traffic first.",
+    updatedAt: "12m ago",
   },
   {
-    pr_number: 2,
-    title: "refactor(auth): Update session token verification schema",
-    author: "alex-dev",
-    branch: "refactor-auth-v2",
-    base_branch: "main",
-    additions: 340,
-    deletions: 190,
-    changed_files: 8,
-    risk_level: "WARN",
-    risk_score: 54,
-    decision: "WARN",
-    blast_radius: {
-      affected_services: ["auth-core", "payment-service", "gateway-api"],
-      max_sla_tier: "P0",
-      total_downstream: 3
-    },
-    ast_summary: {
-      breaking_changes: 1,
-      added_classes: ["TokenValidatorV2"],
-      added_functions: ["verify_jwt_claim"],
-      schema_changes: true
-    },
-    rationale: "Core token validation refactored. Impacts P0 auth services. Recommended to roll out via 10% canary first."
+    id: "pr-421",
+    repo: "acme/auth-gateway",
+    prNumber: 421,
+    title: "Update OAuth token refresh jitter window",
+    author: "s.nair",
+    riskScore: 46,
+    gateStatus: "WARN",
+    blastRadiusHops: 2,
+    affectedServices: ["auth-gateway", "session-cache"],
+    matchedIncidents: [
+      { id: "INC-142", title: "Thundering herd on JWT key rotation", similarity: 0.74 },
+    ],
+    recommendation: "Proceed with caution. Monitor 401/429 spike and cache hit ratio for 15 minutes post-deploy.",
+    updatedAt: "38m ago",
   },
   {
-    pr_number: 3,
-    title: "feat(payments): Remove deprecated Stripe v1 charge endpoints",
-    author: "sara-fintech",
-    branch: "drop-stripe-v1",
-    base_branch: "main",
-    additions: 45,
-    deletions: 480,
-    changed_files: 12,
-    risk_level: "BLOCK",
-    risk_score: 88,
-    decision: "BLOCK",
-    blast_radius: {
-      affected_services: ["payment-service", "billing-worker", "customer-portal", "invoice-gen"],
-      max_sla_tier: "P0",
-      total_downstream: 4
-    },
-    ast_summary: {
-      breaking_changes: 5,
-      added_classes: [],
-      added_functions: [],
-      schema_changes: true
-    },
-    rationale: "CRITICAL: Deletes 5 active API endpoints used by downstream billing workers. Direct merge strictly blocked."
-  }
+    id: "pr-425",
+    repo: "acme/billing-ui",
+    prNumber: 425,
+    title: "Improve invoice CSV export formatting & headers",
+    author: "a.verma",
+    riskScore: 18,
+    gateStatus: "PASS",
+    blastRadiusHops: 1,
+    affectedServices: ["billing-ui"],
+    matchedIncidents: [],
+    recommendation: "Safe to merge. Low blast radius and no matching high-severity incidents.",
+    updatedAt: "1h ago",
+  },
 ];
 
-export default function App() {
-  const [activeTab, setActiveTab] = useState('prs');
-  const [prs, setPrs] = useState(INITIAL_PRS);
-  const [selectedPRIndex, setSelectedPRIndex] = useState(0);
-  const [isApiOnline, setIsApiOnline] = useState(true);
-  const [activeRepo, setActiveRepo] = useState('chandanknayak/deployguard-ai');
-  const [bannerMsg, setBannerMsg] = useState('');
-  const [testStatus, setTestStatus] = useState(null);
-  const [deployStatus, setDeployStatus] = useState(null);
-  const [isLinkModalOpen, setIsLinkModalOpen] = useState(false);
-  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
-  const [newRepoName, setNewRepoName] = useState('');
+function deriveGateStatus(score, threshold = 70) {
+  if (score >= threshold) return "BLOCK";
+  if (score >= 40) return "WARN";
+  return "PASS";
+}
 
-  const currentPR = prs[selectedPRIndex] || prs[0];
+function badgeClasses(status) {
+  switch (status) {
+    case "BLOCK":
+      return "bg-red-500/15 text-red-300 border-red-500/40";
+    case "WARN":
+      return "bg-amber-500/15 text-amber-300 border-amber-500/40";
+    default:
+      return "bg-emerald-500/15 text-emerald-300 border-emerald-500/40";
+  }
+}
+
+export default function App() {
+  const [assessments, setAssessments] = useState(DEMO_ASSESSMENTS);
+  const [selectedId, setSelectedId] = useState(DEMO_ASSESSMENTS[0].id);
+  const [filterStatus, setFilterStatus] = useState("ALL");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [apiOnline, setApiOnline] = useState(false);
+  const [loading, setLoading] = useState(false);
+
+  // Interactive PR Risk Simulator state
+  const [simFilesChanged, setSimFilesChanged] = useState(8);
+  const [simBlastHops, setSimBlastHops] = useState(3);
+  const [simPastIncidents, setSimPastIncidents] = useState(1);
+  const [simTouchesCore, setSimTouchesCore] = useState(true);
 
   useEffect(() => {
-    fetch(`${API_BASE}/healthz`)
-      .then(res => res.ok ? setIsApiOnline(true) : setIsApiOnline(false))
-      .catch(() => setIsApiOnline(false));
+    let active = true;
+
+    async function loadLiveData() {
+      setLoading(true);
+      try {
+        const healthRes = await fetch(`${API_BASE}/healthz`, { signal: AbortSignal.timeout(5000) });
+        if (!healthRes.ok) throw new Error("Health check failed");
+
+        const listRes = await fetch(`${API_BASE}/assessments/`, { signal: AbortSignal.timeout(5000) });
+        if (!active) return;
+
+        setApiOnline(true);
+        if (listRes.ok) {
+          const payload = await listRes.json();
+          const items = Array.isArray(payload)
+            ? payload
+            : payload?.results || payload?.items || payload?.assessments;
+          if (Array.isArray(items) && items.length > 0) {
+            const normalized = items.map((item, idx) => {
+              const agent = item.agent_assessment || {};
+              const blast = item.blast_radius || {};
+              const score = Number(agent.risk_score ?? item.risk_score ?? item.riskScore ?? 25);
+              return {
+                id: item.assessment_id || item.id || item._id || `live-${idx}`,
+                repo: item.repo_full_name || item.repo || item.repository || "unknown/repo",
+                prNumber: item.pr_number ?? item.prNumber ?? idx + 1,
+                title: item.pr_title || item.title || "Pull request assessment",
+                author: item.pr_author || item.author || "ci-bot",
+                riskScore: score,
+                gateStatus: item.risk_level || item.gate_status || item.gateStatus || deriveGateStatus(score),
+                blastRadiusHops: Number(blast.max_depth_reached ?? item.blast_radius_hops ?? item.blastRadiusHops ?? 1),
+                affectedServices: blast.affected_services || item.affected_services || item.affectedServices || ["core-service"],
+                matchedIncidents: item.matched_incidents || item.matchedIncidents || [],
+                recommendation: agent.executive_summary || item.recommendation || "Review AST blast radius before merging.",
+                updatedAt: item.created_at || item.updated_at || item.updatedAt || "Live",
+              };
+            });
+            setAssessments(normalized);
+            setSelectedId(normalized[0].id);
+          }
+        }
+      } catch {
+        if (active) {
+          setApiOnline(false);
+        }
+      } finally {
+        if (active) setLoading(false);
+      }
+    }
+
+    loadLiveData();
+    return () => {
+      active = false;
+    };
   }, []);
 
-  const showBanner = (msg) => {
-    setBannerMsg(msg);
-    setTimeout(() => setBannerMsg(''), 4000);
-  };
+  const filteredAssessments = useMemo(() => {
+    return assessments.filter((item) => {
+      const matchesStatus = filterStatus === "ALL" || item.gateStatus === filterStatus;
+      const q = searchQuery.trim().toLowerCase();
+      const matchesQuery =
+        !q ||
+        item.title.toLowerCase().includes(q) ||
+        item.repo.toLowerCase().includes(q) ||
+        String(item.prNumber).includes(q);
+      return matchesStatus && matchesQuery;
+    });
+  }, [assessments, filterStatus, searchQuery]);
 
-  const handleMerge = async (prNumber, override) => {
-    if (override) {
-      const reason = prompt("Enter mandatory emergency override justification:");
-      if (!reason) return;
-    }
-    showBanner(`Executing merge for PR #${prNumber}...`);
-    try {
-      const res = await fetch(`${API_BASE}/enterprise/repos/${activeRepo}/pulls/${prNumber}/merge`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ merge_method: 'merge', admin_override: override })
-      });
-      const data = await res.json();
-      showBanner(data.message || `✓ PR #${prNumber} merged successfully into main branch!`);
-    } catch {
-      showBanner(`✓ PR #${prNumber} merged into main branch (Simulated).`);
-    }
-  };
+  const activeAssessment = useMemo(() => {
+    return (
+      filteredAssessments.find((a) => a.id === selectedId) ||
+      filteredAssessments[0] ||
+      assessments[0]
+    );
+  }, [filteredAssessments, selectedId, assessments]);
 
-  const runTests = () => {
-    setTestStatus('running');
-    setTimeout(() => {
-      setTestStatus('passed');
-      showBanner("✓ 67 unit & AST contract tests passed in 1.41s.");
-    }, 1400);
-  };
+  const simulatedScore = useMemo(() => {
+    const raw =
+      simFilesChanged * 3.5 +
+      simBlastHops * 11 +
+      simPastIncidents * 16 +
+      (simTouchesCore ? 18 : 0);
+    return Math.min(99, Math.max(5, Math.round(raw)));
+  }, [simFilesChanged, simBlastHops, simPastIncidents, simTouchesCore]);
 
-  const triggerCanary = () => {
-    setDeployStatus('deploying');
-    setTimeout(() => {
-      setDeployStatus('live');
-      showBanner("🚀 Canary deployment (10% traffic) live. Zero error anomalies.");
-    }, 1800);
-  };
+  const simulatedGate = deriveGateStatus(simulatedScore);
+
+  const metrics = useMemo(() => {
+    const blocked = assessments.filter((a) => a.gateStatus === "BLOCK").length;
+    const avgScore = assessments.length
+      ? Math.round(assessments.reduce((acc, a) => acc + a.riskScore, 0) / assessments.length)
+      : 0;
+    const maxHops = assessments.reduce((max, a) => Math.max(max, a.blastRadiusHops), 0);
+    return { blocked, avgScore, maxHops, total: assessments.length };
+  }, [assessments]);
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
-      {/* Navbar */}
-      <header className="sticky top-0 z-40 border-b border-slate-800 bg-slate-950/80 backdrop-blur-md">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-          <div className="flex items-center space-x-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-500 flex items-center justify-center shadow-lg shadow-indigo-500/20">
-              <Shield className="w-5 h-5 text-white" />
+    <div className="min-h-screen bg-slate-950 text-slate-100">
+      <header className="border-b border-slate-800 bg-slate-900/80 backdrop-blur">
+        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4 px-6 py-4">
+          <div>
+            <div className="flex items-center gap-3">
+              <h1 className="text-xl font-bold tracking-tight text-white">DeployGuard AI</h1>
+              <span className="rounded-full border border-indigo-500/40 bg-indigo-500/15 px-2.5 py-0.5 text-xs font-medium text-indigo-300">
+                Release Risk Gate
+              </span>
             </div>
-            <div>
-              <div className="flex items-center space-x-2">
-                <span className="font-bold text-lg text-white">DeployGuard <span className="text-indigo-400">AI</span></span>
-                <span className="text-[10px] font-semibold bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 px-2 py-0.5 rounded-full uppercase">Enterprise</span>
-              </div>
-              <p className="text-xs text-slate-400 hidden sm:block">AI-Powered Release Risk & Change-Impact Guard</p>
-            </div>
+            <p className="mt-0.5 text-xs text-slate-400">
+              AST Blast Radius · Historical Incident Vector Recall · Autonomous CI/CD Policy
+            </p>
           </div>
 
-          <nav className="hidden md:flex items-center space-x-1 bg-slate-900/90 p-1 rounded-xl border border-slate-800 text-xs">
-            <button 
-              onClick={() => setActiveTab('prs')}
-              className={`px-3.5 py-1.5 rounded-lg font-medium transition ${activeTab === 'prs' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'}`}
+          <div className="flex items-center gap-3">
+            <span
+              className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-medium ${
+                apiOnline
+                  ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
+                  : "border-amber-500/40 bg-amber-500/10 text-amber-300"
+              }`}
             >
-              PR Command Center
-            </button>
-            <button 
-              onClick={() => setActiveTab('blast')}
-              className={`px-3.5 py-1.5 rounded-lg font-medium transition ${activeTab === 'blast' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'}`}
-            >
-              Blast Radius
-            </button>
-            <button 
-              onClick={() => setActiveTab('deploy')}
-              className={`px-3.5 py-1.5 rounded-lg font-medium transition ${activeTab === 'deploy' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'}`}
-            >
-              Release Hub
-            </button>
-            <button 
-              onClick={() => setActiveTab('repos')}
-              className={`px-3.5 py-1.5 rounded-lg font-medium transition ${activeTab === 'repos' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'}`}
-            >
-              Repositories
-            </button>
-            <button 
-              onClick={() => setActiveTab('policy')}
-              className={`px-3.5 py-1.5 rounded-lg font-medium transition ${activeTab === 'policy' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'}`}
-            >
-              Governance
-            </button>
-          </nav>
-
-          <div className="flex items-center space-x-3">
-            <div className={`flex items-center space-x-1.5 px-2.5 py-1 rounded-full text-xs font-medium border ${isApiOnline ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' : 'bg-amber-500/10 text-amber-400 border-amber-500/20'}`}>
-              <span className={`w-2 h-2 rounded-full ${isApiOnline ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`}></span>
-              <span>{isApiOnline ? 'Cloud API Online' : 'Local / Demo Mode'}</span>
-            </div>
-
-            <button 
-              onClick={() => setIsAuthModalOpen(true)}
-              className="flex items-center space-x-2 bg-slate-900 hover:bg-slate-800 border border-slate-700 px-3 py-1.5 rounded-xl text-xs font-medium transition"
-            >
-              <span className="w-5 h-5 rounded-full bg-indigo-600/40 text-indigo-300 flex items-center justify-center font-bold text-[10px]">DG</span>
-              <span>Enterprise Org</span>
-            </button>
+              <span
+                className={`h-2 w-2 rounded-full ${
+                  apiOnline ? "bg-emerald-400" : "bg-amber-400"
+                }`}
+              />
+              {loading ? "Syncing API..." : apiOnline ? "Live Backend Connected" : "Demo Fallback Mode"}
+            </span>
           </div>
         </div>
       </header>
 
-      {/* Banner */}
-      {bannerMsg && (
-        <div className="bg-indigo-950/80 border-b border-indigo-500/30 px-4 py-2 text-center text-xs text-indigo-200">
-          {bannerMsg}
-        </div>
-      )}
-
-      {/* Main Container */}
-      <main className="max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6 flex-1">
-        {/* Repo Picker Bar */}
-        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 p-4 rounded-2xl bg-slate-900/60 border border-slate-800">
-          <div className="flex items-center space-x-3">
-            <FolderGit2 className="w-5 h-5 text-indigo-400" />
-            <span className="text-xs text-slate-400">Guarded Repo:</span>
-            <select 
-              value={activeRepo} 
-              onChange={(e) => { setActiveRepo(e.target.value); showBanner(`Switched to ${e.target.value}`); }}
-              className="bg-slate-950 border border-slate-700 text-white text-xs rounded-xl px-3 py-1.5 font-mono focus:outline-none focus:border-indigo-500"
-            >
-              <option value="chandanknayak/deployguard-ai">chandanknayak/deployguard-ai</option>
-              <option value="acme-corp/payment-service">acme-corp/payment-service [P0]</option>
-              <option value="acme-corp/auth-core">acme-corp/auth-core [P0]</option>
-            </select>
+      <main className="mx-auto max-w-7xl space-y-6 px-6 py-6">
+        {/* Executive KPI Cards */}
+        <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
+            <p className="text-xs font-medium uppercase tracking-wider text-slate-400">
+              Evaluated PRs
+            </p>
+            <p className="mt-2 text-2xl font-bold text-white">{metrics.total}</p>
+            <p className="mt-1 text-xs text-slate-400">Active release candidates</p>
           </div>
 
-          <div className="flex items-center space-x-2">
-            <button 
-              onClick={() => setIsLinkModalOpen(true)}
-              className="px-3 py-1.5 rounded-xl text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition flex items-center space-x-1"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              <span>Link Repository</span>
-            </button>
-            <button 
-              onClick={() => showBanner("Data refreshed from GitHub and MongoDB.")}
-              className="px-3 py-1.5 rounded-xl text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition flex items-center space-x-1"
-            >
-              <RefreshCw className="w-3.5 h-3.5" />
-              <span>Refresh</span>
-            </button>
+          <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
+            <p className="text-xs font-medium uppercase tracking-wider text-slate-400">
+              Blocked Releases
+            </p>
+            <p className="mt-2 text-2xl font-bold text-red-400">{metrics.blocked}</p>
+            <p className="mt-1 text-xs text-slate-400">Score &gt;= 70 gate threshold</p>
           </div>
-        </div>
 
-        {/* TAB 1: PR COMMAND CENTER */}
-        {activeTab === 'prs' && (
-          <div className="space-y-6">
-            {/* Metric counters */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              <div className="p-4 rounded-2xl bg-slate-900/50 border border-slate-800">
-                <p className="text-xs text-slate-400 uppercase font-medium">Open Pull Requests</p>
-                <p className="text-2xl font-bold text-white mt-1">{prs.length}</p>
-              </div>
-              <div className="p-4 rounded-2xl bg-slate-900/50 border border-emerald-500/20">
-                <p className="text-xs text-emerald-400 uppercase font-medium">Safe to Merge</p>
-                <p className="text-2xl font-bold text-emerald-400 mt-1">{prs.filter(p => p.risk_level === 'PASS').length}</p>
-              </div>
-              <div className="p-4 rounded-2xl bg-slate-900/50 border border-amber-500/20">
-                <p className="text-xs text-amber-400 uppercase font-medium">Review Needed</p>
-                <p className="text-2xl font-bold text-amber-400 mt-1">{prs.filter(p => p.risk_level === 'WARN').length}</p>
-              </div>
-              <div className="p-4 rounded-2xl bg-slate-900/50 border border-rose-500/20">
-                <p className="text-xs text-rose-400 uppercase font-medium">Blocked (High Risk)</p>
-                <p className="text-2xl font-bold text-rose-400 mt-1">{prs.filter(p => p.risk_level === 'BLOCK').length}</p>
+          <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
+            <p className="text-xs font-medium uppercase tracking-wider text-slate-400">
+              Avg Risk Score
+            </p>
+            <p className="mt-2 text-2xl font-bold text-indigo-300">{metrics.avgScore}/100</p>
+            <p className="mt-1 text-xs text-slate-400">Composite risk index</p>
+          </div>
+
+          <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
+            <p className="text-xs font-medium uppercase tracking-wider text-slate-400">
+              Max Blast Radius
+            </p>
+            <p className="mt-2 text-2xl font-bold text-amber-300">{metrics.maxHops} hops</p>
+            <p className="mt-1 text-xs text-slate-400">Dependency graph depth</p>
+          </div>
+        </section>
+
+        {/* Assessments Queue + Detail Inspector */}
+        <section className="grid grid-cols-1 gap-6 lg:grid-cols-12">
+          <div className="space-y-4 rounded-xl border border-slate-800 bg-slate-900 p-4 lg:col-span-5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h2 className="text-sm font-semibold text-white">Pull Request Queue</h2>
+              <div className="flex gap-1">
+                {["ALL", "BLOCK", "WARN", "PASS"].map((status) => (
+                  <button
+                    key={status}
+                    type="button"
+                    onClick={() => setFilterStatus(status)}
+                    className={`rounded-md px-2.5 py-1 text-xs font-medium transition ${
+                      filterStatus === status
+                        ? "bg-indigo-600 text-white"
+                        : "bg-slate-800 text-slate-300 hover:bg-slate-700"
+                    }`}
+                  >
+                    {status}
+                  </button>
+                ))}
               </div>
             </div>
 
-            {/* Deck */}
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-              {/* Left Column: PR list */}
-              <div className="lg:col-span-5 space-y-2.5">
-                <h2 className="text-xs font-semibold text-slate-400 uppercase">Incoming PRs</h2>
-                {prs.map((pr, idx) => {
-                  const isSelected = idx === selectedPRIndex;
-                  return (
-                    <div 
-                      key={pr.pr_number}
-                      onClick={() => setSelectedPRIndex(idx)}
-                      className={`p-3.5 rounded-xl border cursor-pointer transition ${isSelected ? 'bg-slate-900 border-indigo-500 shadow-md shadow-indigo-500/10' : 'bg-slate-900/40 border-slate-800 hover:border-slate-700'}`}
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <span className="text-xs font-semibold text-white leading-snug">#{pr.pr_number} {pr.title}</span>
-                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full shrink-0 ${pr.risk_level === 'PASS' ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30' : pr.risk_level === 'WARN' ? 'bg-amber-500/15 text-amber-400 border border-amber-500/30' : 'bg-rose-500/15 text-rose-400 border border-rose-500/30'}`}>
-                          {pr.risk_level}
-                        </span>
-                      </div>
-                      <div className="flex items-center justify-between mt-2 text-[11px] text-slate-400 font-mono">
-                        <span>@{pr.author}</span>
-                        <div className="flex items-center space-x-2">
-                          <span className="text-emerald-400">+{pr.additions}</span>
-                          <span className="text-rose-400">-{pr.deletions}</span>
-                          <span className="text-slate-300 font-bold">Score {pr.risk_score}</span>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Filter by repo, PR #, or title..."
+              className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-indigo-500 focus:outline-none"
+            />
 
-              {/* Right Column: Deep Risk Guard Details */}
-              <div className="lg:col-span-7">
-                <div className="p-6 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-6">
-                  {/* PR Header */}
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-4">
-                    <div>
-                      <span className="text-xs font-mono text-indigo-400 font-semibold">PR #{currentPR.pr_number} · {currentPR.branch} → {currentPR.base_branch}</span>
-                      <h3 className="text-base font-bold text-white mt-1">{currentPR.title}</h3>
-                    </div>
-                    <div>
-                      <span className={`text-xs font-bold px-3 py-1 rounded-full ${currentPR.risk_level === 'PASS' ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30' : currentPR.risk_level === 'WARN' ? 'bg-amber-500/15 text-amber-400 border border-amber-500/30' : 'bg-rose-500/15 text-rose-400 border border-rose-500/30'}`}>
-                        {currentPR.decision}
+            <div className="space-y-2.5">
+              {filteredAssessments.map((item) => {
+                const isSelected = activeAssessment?.id === item.id;
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => setSelectedId(item.id)}
+                    className={`w-full rounded-lg border p-3 text-left transition ${
+                      isSelected
+                        ? "border-indigo-500 bg-slate-800/90"
+                        : "border-slate-800 bg-slate-950/60 hover:border-slate-700"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-mono text-slate-400">
+                        {item.repo} #{item.prNumber}
+                      </span>
+                      <span
+                        className={`rounded border px-2 py-0.5 text-[11px] font-semibold ${badgeClasses(
+                          item.gateStatus
+                        )}`}
+                      >
+                        {item.gateStatus} · {item.riskScore}
                       </span>
                     </div>
-                  </div>
-
-                  {/* 3 Metric Cards */}
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                    <div className="p-4 rounded-xl bg-slate-950/60 border border-slate-800 text-center">
-                      <span className="text-[10px] uppercase font-bold text-slate-400">Composite Risk</span>
-                      <p className={`text-3xl font-extrabold font-mono mt-1 ${currentPR.risk_score <= 35 ? 'text-emerald-400' : currentPR.risk_score <= 65 ? 'text-amber-400' : 'text-rose-400'}`}>
-                        {currentPR.risk_score} <span className="text-xs text-slate-500">/ 100</span>
-                      </p>
-                      <p className="text-[10px] text-slate-500 mt-1">{currentPR.risk_score <= 35 ? 'Safe for Auto-Merge' : 'Exceeds Safety Threshold'}</p>
+                    <p className="mt-1 text-sm font-medium text-white line-clamp-1">{item.title}</p>
+                    <div className="mt-2 flex items-center justify-between text-xs text-slate-400">
+                      <span>by {item.author}</span>
+                      <span>{item.blastRadiusHops} graph hops</span>
+                      <span>{item.updatedAt}</span>
                     </div>
+                  </button>
+                );
+              })}
 
-                    <div className="p-4 rounded-xl bg-slate-950/60 border border-slate-800">
-                      <span className="text-[10px] uppercase font-bold text-slate-400">Blast Radius</span>
-                      <p className="text-xl font-bold text-white mt-1">{currentPR.blast_radius.total_downstream} Services</p>
-                      <p className="text-xs text-rose-400 font-semibold">Max Tier: {currentPR.blast_radius.max_sla_tier}</p>
-                    </div>
+              {filteredAssessments.length === 0 && (
+                <p className="py-8 text-center text-sm text-slate-400">
+                  No pull requests match the current filter.
+                </p>
+              )}
+            </div>
+          </div>
 
-                    <div className="p-4 rounded-xl bg-slate-950/60 border border-slate-800">
-                      <span className="text-[10px] uppercase font-bold text-slate-400">AST Analysis</span>
-                      <p className="text-xs text-slate-300 mt-1 font-mono">Lines: <span className="text-emerald-400">+{currentPR.additions}</span> <span className="text-rose-400">-{currentPR.deletions}</span></p>
-                      <p className="text-xs text-slate-400 mt-0.5">Breaking APIs: <strong className={currentPR.ast_summary.breaking_changes > 0 ? 'text-rose-400' : 'text-slate-200'}>{currentPR.ast_summary.breaking_changes}</strong></p>
-                    </div>
+          <div className="rounded-xl border border-slate-800 bg-slate-900 p-5 lg:col-span-7">
+            {activeAssessment ? (
+              <div className="space-y-5">
+                <div className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-800 pb-4">
+                  <div>
+                    <p className="text-xs font-mono text-indigo-300">
+                      {activeAssessment.repo} · Pull Request #{activeAssessment.prNumber}
+                    </p>
+                    <h2 className="mt-1 text-lg font-bold text-white">{activeAssessment.title}</h2>
                   </div>
-
-                  {/* AI Rationale */}
-                  <div className="p-4 rounded-xl bg-indigo-950/20 border border-indigo-500/20 space-y-1">
-                    <span className="text-xs font-semibold text-indigo-300 flex items-center space-x-1.5">
-                      <Shield className="w-3.5 h-3.5" />
-                      <span>AI Guard Assessment & Impact Rationale</span>
-                    </span>
-                    <p className="text-xs text-slate-300 leading-relaxed">{currentPR.rationale}</p>
-                  </div>
-
-                  {/* Actions Bar */}
-                  <div className="pt-2 flex flex-col sm:flex-row items-center justify-between gap-3 border-t border-slate-800">
-                    <a 
-                      href={`https://github.com/chandanknayak/deployguard-ai/pull/${currentPR.pr_number}`} 
-                      target="_blank" 
-                      rel="noreferrer"
-                      className="text-xs text-slate-400 hover:text-white flex items-center space-x-1"
+                  <div className="text-right">
+                    <span
+                      className={`inline-block rounded-md border px-3 py-1 text-xs font-bold ${badgeClasses(
+                        activeAssessment.gateStatus
+                      )}`}
                     >
-                      <span>View on GitHub</span>
-                      <ExternalLink className="w-3.5 h-3.5" />
-                    </a>
-
-                    <div className="flex items-center space-x-2">
-                      {currentPR.risk_level === 'BLOCK' ? (
-                        <button 
-                          onClick={() => handleMerge(currentPR.pr_number, true)}
-                          className="px-4 py-2 rounded-xl text-xs font-bold bg-rose-600/30 hover:bg-rose-600/50 border border-rose-500 text-rose-200 transition"
-                        >
-                          ⚠️ Override & Force Merge
-                        </button>
-                      ) : (
-                        <button 
-                          onClick={() => handleMerge(currentPR.pr_number, false)}
-                          className="px-5 py-2.5 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white shadow-md shadow-emerald-600/20 transition flex items-center space-x-1.5"
-                        >
-                          <Check className="w-4 h-4" />
-                          <span>Merge Pull Request (Safe)</span>
-                        </button>
-                      )}
-                    </div>
+                      GATE: {activeAssessment.gateStatus}
+                    </span>
+                    <p className="mt-1 text-xs text-slate-400">
+                      Risk Score: <strong className="text-white">{activeAssessment.riskScore}/100</strong>
+                    </p>
                   </div>
                 </div>
-              </div>
-            </div>
-          </div>
-        )}
 
-        {/* TAB 2: BLAST RADIUS */}
-        {activeTab === 'blast' && (
-          <div className="p-6 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-4">
-            <h2 className="text-base font-bold text-white flex items-center space-x-2">
-              <Network className="w-5 h-5 text-indigo-400" />
-              <span>Microservice Dependency & Blast Radius Map</span>
-            </h2>
-            <p className="text-xs text-slate-400">Shows how modified functions in the active PR cascade downstream to impact dependent microservices.</p>
-            
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-4">
-              <div className="p-4 rounded-xl bg-slate-950 border border-rose-500/30">
-                <span className="text-[10px] font-bold text-rose-400 uppercase">P0 Critical Service</span>
-                <p className="text-sm font-bold text-white mt-1">auth-service</p>
-                <p className="text-xs text-slate-400 mt-1">Direct dependency. Token validation failure will cause authentication service outage.</p>
-              </div>
-              <div className="p-4 rounded-xl bg-slate-950 border border-rose-500/30">
-                <span className="text-[10px] font-bold text-rose-400 uppercase">P0 Critical Service</span>
-                <p className="text-sm font-bold text-white mt-1">payment-service</p>
-                <p className="text-xs text-slate-400 mt-1">Indirect dependency via API gateway. Processes order charges.</p>
-              </div>
-              <div className="p-4 rounded-xl bg-slate-950 border border-amber-500/30">
-                <span className="text-[10px] font-bold text-amber-400 uppercase">P1 High SLA</span>
-                <p className="text-sm font-bold text-white mt-1">notification-service</p>
-                <p className="text-xs text-slate-400 mt-1">Consumes webhooks for customer transaction receipts.</p>
-              </div>
-            </div>
-          </div>
-        )}
+                <div>
+                  <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                    Blast Radius Services ({activeAssessment.blastRadiusHops} hops)
+                  </h3>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {activeAssessment.affectedServices.map((svc) => (
+                      <span
+                        key={svc}
+                        className="rounded-md border border-slate-700 bg-slate-800 px-2.5 py-1 text-xs font-mono text-slate-200"
+                      >
+                        {svc}
+                      </span>
+                    ))}
+                  </div>
+                </div>
 
-        {/* TAB 3: RELEASE & CI/CD HUB */}
-        {activeTab === 'deploy' && (
-          <div className="p-6 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-6">
-            <h2 className="text-base font-bold text-white flex items-center space-x-2">
-              <Rocket className="w-5 h-5 text-indigo-400" />
-              <span>Automated Release & Deployment Guard</span>
-            </h2>
+                <div>
+                  <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                    Historical Incident Matches
+                  </h3>
+                  {activeAssessment.matchedIncidents.length > 0 ? (
+                    <div className="mt-2 space-y-2">
+                      {activeAssessment.matchedIncidents.map((inc) => (
+                        <div
+                          key={inc.id}
+                          className="flex items-center justify-between rounded-lg border border-slate-800 bg-slate-950 px-3.5 py-2.5 text-sm"
+                        >
+                          <div>
+                            <span className="font-mono text-xs text-amber-300">{inc.id}</span>{" "}
+                            <span className="text-slate-200">{inc.title}</span>
+                          </div>
+                          <span className="text-xs text-slate-400">
+                            {Math.round(inc.similarity * 100)}% match
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="mt-2 text-sm text-slate-400">
+                      No similar historical incidents detected.
+                    </p>
+                  )}
+                </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-3">
-                <h3 className="text-xs font-bold text-slate-200">1. Pre-Deploy Contract Tests</h3>
-                <p className="text-xs text-slate-400">Runs AST regression tests and schema validation before deployment.</p>
-                <button 
-                  onClick={runTests}
-                  className="w-full py-2 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-indigo-300 border border-indigo-500/30 transition"
-                >
-                  {testStatus === 'running' ? 'Running Tests...' : testStatus === 'passed' ? '✓ 67 Tests Passed' : 'Run Tests'}
-                </button>
-              </div>
-
-              <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-3">
-                <h3 className="text-xs font-bold text-slate-200">2. Enforce Safe Merge Gate</h3>
-                <p className="text-xs text-slate-400">Verifies zero-breaking-change rule before merging into main.</p>
-                <button 
-                  onClick={() => handleMerge(currentPR.pr_number, false)}
-                  className="w-full py-2 rounded-lg text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white transition"
-                >
-                  Merge Current PR
-                </button>
-              </div>
-
-              <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-3">
-                <h3 className="text-xs font-bold text-slate-200">3. Progressive Canary Rollout</h3>
-                <p className="text-xs text-slate-400">Deploys to 10% canary traffic with automated health monitoring.</p>
-                <button 
-                  onClick={triggerCanary}
-                  className="w-full py-2 rounded-lg text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white transition"
-                >
-                  {deployStatus === 'deploying' ? 'Deploying Canary...' : deployStatus === 'live' ? '🚀 Canary Live (10%)' : 'Trigger Canary'}
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* TAB 4: REPOSITORIES */}
-        {activeTab === 'repos' && (
-          <div className="p-6 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-4">
-            <div className="flex items-center justify-between">
-              <h2 className="text-base font-bold text-white flex items-center space-x-2">
-                <FolderGit2 className="w-5 h-5 text-indigo-400" />
-                <span>Connected GitHub Repositories</span>
-              </h2>
-              <button 
-                onClick={() => setIsLinkModalOpen(true)}
-                className="px-3 py-1.5 rounded-xl text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white transition"
-              >
-                + Link New Repo
-              </button>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
-              <div className="p-4 rounded-xl bg-slate-950 border border-indigo-500/40">
-                <span className="font-bold text-sm text-white">chandanknayak/deployguard-ai</span>
-                <p className="text-xs text-slate-400 mt-1">Core DeployGuard repository. AST engine & risk pipeline active.</p>
-                <div className="mt-3 text-xs text-emerald-400 flex items-center space-x-1">
-                  <CheckCircle2 className="w-3.5 h-3.5" />
-                  <span>Webhook Active: https://deployguard-ai.onrender.com/webhook/github</span>
+                <div className="rounded-lg border border-indigo-500/30 bg-indigo-950/30 p-4">
+                  <h3 className="text-xs font-semibold uppercase tracking-wider text-indigo-300">
+                    Release Agent Recommendation
+                  </h3>
+                  <p className="mt-1.5 text-sm leading-relaxed text-slate-200">
+                    {activeAssessment.recommendation}
+                  </p>
                 </div>
               </div>
-            </div>
+            ) : null}
           </div>
-        )}
+        </section>
 
-        {/* TAB 5: GOVERNANCE POLICY */}
-        {activeTab === 'policy' && (
-          <div className="p-6 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-4">
-            <h2 className="text-base font-bold text-white flex items-center space-x-2">
-              <Settings className="w-5 h-5 text-indigo-400" />
-              <span>Release Risk Governance Policy</span>
-            </h2>
-            <div className="space-y-4 max-w-xl text-xs">
-              <div>
-                <label className="block text-slate-300 font-semibold mb-1">Max Auto-Merge Risk Score Threshold: 35 / 100</label>
-                <input type="range" min="10" max="80" defaultValue="35" className="w-full accent-indigo-500" />
-              </div>
-              <div className="space-y-2 pt-2">
-                <label className="flex items-center space-x-2 cursor-pointer">
-                  <input type="checkbox" defaultChecked className="rounded text-indigo-600 bg-slate-900 border-slate-700" />
-                  <span>Block PR if any P0 SLA downstream service is impacted</span>
-                </label>
-                <label className="flex items-center space-x-2 cursor-pointer">
-                  <input type="checkbox" defaultChecked className="rounded text-indigo-600 bg-slate-900 border-slate-700" />
-                  <span>Require 10% Canary deployment for medium-risk releases</span>
-                </label>
-              </div>
-              <button 
-                onClick={() => showBanner("Governance policy updated in MongoDB.")}
-                className="px-4 py-2 rounded-xl text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white transition mt-3"
+        {/* Interactive Risk Simulator */}
+        <section className="rounded-xl border border-slate-800 bg-slate-900 p-5">
+          <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-800 pb-4">
+            <div>
+              <h2 className="text-base font-bold text-white">Release Risk Simulator</h2>
+              <p className="text-xs text-slate-400">
+                Model how diff size, dependency hops, incident history, and core paths affect the gate
+              </p>
+            </div>
+            <div className="flex items-center gap-3">
+              <span className="text-sm text-slate-300">
+                Simulated Score: <strong className="text-white">{simulatedScore}/100</strong>
+              </span>
+              <span
+                className={`rounded-md border px-2.5 py-1 text-xs font-bold ${badgeClasses(
+                  simulatedGate
+                )}`}
               >
-                Save Policy
-              </button>
+                {simulatedGate}
+              </span>
             </div>
           </div>
-        )}
+
+          <div className="mt-4 grid grid-cols-1 gap-5 md:grid-cols-4">
+            <label className="space-y-1.5 text-xs text-slate-300">
+              <div className="flex justify-between">
+                <span>Modified Files</span>
+                <span className="font-mono text-white">{simFilesChanged}</span>
+              </div>
+              <input
+                type="range"
+                min="1"
+                max="40"
+                value={simFilesChanged}
+                onChange={(e) => setSimFilesChanged(Number(e.target.value))}
+                className="w-full accent-indigo-500"
+              />
+            </label>
+
+            <label className="space-y-1.5 text-xs text-slate-300">
+              <div className="flex justify-between">
+                <span>Blast Radius Hops</span>
+                <span className="font-mono text-white">{simBlastHops}</span>
+              </div>
+              <input
+                type="range"
+                min="0"
+                max="6"
+                value={simBlastHops}
+                onChange={(e) => setSimBlastHops(Number(e.target.value))}
+                className="w-full accent-indigo-500"
+              />
+            </label>
+
+            <label className="space-y-1.5 text-xs text-slate-300">
+              <div className="flex justify-between">
+                <span>Past Incidents</span>
+                <span className="font-mono text-white">{simPastIncidents}</span>
+              </div>
+              <input
+                type="range"
+                min="0"
+                max="5"
+                value={simPastIncidents}
+                onChange={(e) => setSimPastIncidents(Number(e.target.value))}
+                className="w-full accent-indigo-500"
+              />
+            </label>
+
+            <div className="flex items-center justify-between rounded-lg border border-slate-800 bg-slate-950 px-3.5 py-2.5">
+              <span className="text-xs font-medium text-slate-300">Touches Critical Path</span>
+              <input
+                type="checkbox"
+                checked={simTouchesCore}
+                onChange={(e) => setSimTouchesCore(e.target.checked)}
+                className="h-4 w-4 accent-indigo-500"
+              />
+            </div>
+          </div>
+        </section>
       </main>
-
-      {/* Link Repo Modal */}
-      {isLinkModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 space-y-4">
-            <h3 className="text-base font-bold text-white">Link GitHub Repository</h3>
-            <p className="text-xs text-slate-400">Connect a repository so DeployGuard can guard incoming pull requests.</p>
-            <input 
-              type="text" 
-              placeholder="e.g. acme-corp/billing-service" 
-              value={newRepoName}
-              onChange={(e) => setNewRepoName(e.target.value)}
-              className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white" 
-            />
-            <div className="flex justify-end space-x-2 pt-2">
-              <button onClick={() => setIsLinkModalOpen(false)} className="px-3 py-1.5 text-xs text-slate-400 hover:text-white">Cancel</button>
-              <button 
-                onClick={() => {
-                  if (!newRepoName) return;
-                  setIsLinkModalOpen(false);
-                  showBanner(`✓ Linked repo ${newRepoName}`);
-                }}
-                className="px-4 py-1.5 text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl"
-              >
-                Link Repo
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Auth Modal */}
-      {isAuthModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-sm w-full p-6 space-y-4">
-            <h3 className="text-base font-bold text-white">Enterprise Workspace</h3>
-            <p className="text-xs text-slate-400">Signed in as <strong>chandanknayak</strong> (Tech Lead)</p>
-            <div className="space-y-2 text-xs">
-              <label className="block text-slate-300">Active Organization: Acme Global Platform</label>
-              <label className="block text-slate-300">Role: Release Engineer / Tech Lead</label>
-            </div>
-            <button 
-              onClick={() => setIsAuthModalOpen(false)}
-              className="w-full py-2 text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl"
-            >
-              Close
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Footer */}
-      <footer className="border-t border-slate-800/80 bg-slate-950 py-4 text-center text-xs text-slate-500">
-        DeployGuard AI · Guarding enterprise software releases against breaking changes
-      </footer>
     </div>
   );
 }
