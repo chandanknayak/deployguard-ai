@@ -558,15 +558,48 @@
         deletions: 4,
         changed_files: 2,
         risk_level: "PASS",
-        risk_score: 16,
+        risk_score: 18,
         decision: "PASS",
         blast_radius: { affected_services: ["payments-api", "notification-worker"], max_sla_tier: "P1", total_downstream: 2 },
         ast_summary: { breaking_changes: 0, schema_changes: false },
+        signals: { ast: 10, blast: 22, critical_path: 15, test_gap: 5 },
+        diff_preview: [
+          { type: "add", text: "+ async def retry_with_backoff(fn, max_retries=3):" },
+          { type: "add", text: "+     \"\"\"Additive helper; existing callers unaffected.\"\"\"" },
+          { type: "ctx", text: "  # Unit tests added: tests/test_retry_backoff.py (+42 lines)" }
+        ],
+        matched_incidents: [],
         plain_explanation: "Additive utility with unit tests. Zero breaking API changes. Safe to merge.",
-        rationale: "No public function signatures modified or deleted."
+        rationale: "No public function signatures modified or deleted. Safe for standard merge."
       },
       {
         pr_number: 102,
+        title: "refactor(auth): Update OAuth token refresh jitter window",
+        author: "priya-sec",
+        branch: "refactor/oauth-jitter",
+        base_branch: "main",
+        additions: 92,
+        deletions: 38,
+        changed_files: 4,
+        risk_level: "WARN",
+        risk_score: 52,
+        decision: "WARN",
+        blast_radius: { affected_services: ["auth-gateway", "session-cache", "payments-api"], max_sla_tier: "P0", total_downstream: 3 },
+        ast_summary: { breaking_changes: 0, schema_changes: false },
+        signals: { ast: 42, blast: 65, critical_path: 75, test_gap: 20 },
+        diff_preview: [
+          { type: "del", text: "- TOKEN_TTL_JITTER_SEC = 15" },
+          { type: "add", text: "+ TOKEN_TTL_JITTER_SEC = compute_adaptive_jitter(load_factor)" },
+          { type: "ctx", text: "  # Touches /auth/refresh critical path (P0 SLA)" }
+        ],
+        matched_incidents: [
+          { id: "INC-142", title: "Thundering herd on JWT key rotation", similarity: 74 }
+        ],
+        plain_explanation: "Modifies P0 auth refresh path. Backward compatible, but 10% canary rollout recommended.",
+        rationale: "Touches high-criticality /auth path with 3 downstream consumers. Deploy via Canary first."
+      },
+      {
+        pr_number: 103,
         title: "refactor(billing): Remove legacy charge_v1 endpoint",
         author: "sam-backend",
         branch: "cleanup/drop-v1",
@@ -575,12 +608,21 @@
         deletions: 210,
         changed_files: 5,
         risk_level: "BLOCK",
-        risk_score: 86,
+        risk_score: 88,
         decision: "BLOCK",
         blast_radius: { affected_services: ["payments-api", "checkout-service", "invoice-worker"], max_sla_tier: "P0", total_downstream: 3 },
         ast_summary: { breaking_changes: 3, schema_changes: true },
+        signals: { ast: 95, blast: 90, critical_path: 92, test_gap: 70 },
+        diff_preview: [
+          { type: "del", text: "- @router.post('/v1/payments/charge')  # BREAKING: 2 consumers" },
+          { type: "del", text: "- def process_charge_v1(order_id: str, amount: int):" },
+          { type: "ctx", text: "  ! Called by checkout-service/client.py:142 & invoice-worker" }
+        ],
+        matched_incidents: [
+          { id: "INC-209", title: "Checkout 502 outage after unannounced endpoint removal", similarity: 92 }
+        ],
         plain_explanation: "Deletes charge_v1 which checkout-service still calls. Merging will break P0 checkout.",
-        rationale: "3 breaking API removals affecting P0 downstream service."
+        rationale: "3 breaking API removals affecting P0 downstream service. Merge blocked by policy."
       }
     ];
 
@@ -1120,6 +1162,19 @@
         : pr.risk_level === "WARN" ? "badge-warn"
         : pr.risk_level === "BLOCK" ? "badge-block" : "badge-pending";
       const scoreColor = pr.risk_score <= 35 ? "#059669" : pr.risk_score <= 65 ? "#d97706" : "#e11d48";
+      const ringCircumference = 2 * Math.PI * 34;
+      const ringOffset = ringCircumference - (Math.min(100, Math.max(0, pr.risk_score)) / 100) * ringCircumference;
+      const sig = pr.signals || {
+        ast: Math.min(100, pr.risk_score + 5),
+        blast: Math.min(100, pr.blast_radius.total_downstream * 25),
+        critical_path: pr.blast_radius.max_sla_tier === "P0" ? 80 : 25,
+        test_gap: pr.risk_score > 60 ? 60 : 15
+      };
+      const diffLines = pr.diff_preview || [
+        { type: "ctx", text: `  Modified ${pr.changed_files} file(s): +${pr.additions} additions, -${pr.deletions} deletions` },
+        { type: pr.ast_summary.breaking_changes > 0 ? "del" : "add", text: pr.ast_summary.breaking_changes > 0 ? `- ${pr.ast_summary.breaking_changes} breaking signature change(s) detected` : "+ No breaking public API signatures detected" }
+      ];
+      const incidents = pr.matched_incidents || [];
 
       container.innerHTML = `
         <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200 pb-4">
@@ -1128,43 +1183,95 @@
               <span class="font-bold text-indigo-600">PR #${pr.pr_number}</span>
               <span class="text-slate-300">•</span>
               <span class="text-slate-500">${pr.branch} → ${pr.base_branch}</span>
+              <span class="text-slate-300">•</span>
+              <span class="text-slate-500">@${pr.author}</span>
             </div>
             <h2 class="text-base font-bold text-slate-900 mt-1">${pr.title}</h2>
           </div>
-          <span class="text-xs font-bold px-3 py-1 rounded-full shrink-0 ${badgeCls}">${pr.decision}</span>
+          <span class="text-xs font-bold px-3.5 py-1.5 rounded-full shrink-0 ${badgeCls}">${pr.decision}</span>
         </div>
 
-        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <div class="p-4 rounded-xl bg-slate-50 border border-slate-200 text-center">
-            <span class="text-[10px] font-bold text-slate-500 uppercase">Risk Score</span>
-            <div class="my-1 flex items-baseline justify-center">
-              <span class="text-3xl font-extrabold font-mono" style="color: ${scoreColor}">${pr.risk_score}</span>
-              <span class="text-xs text-slate-400 font-mono ml-1">/ 100</span>
+        <!-- Top Visual Gauge + Weighted Signal Breakdown -->
+        <div class="grid grid-cols-1 sm:grid-cols-12 gap-4 items-center">
+          <div class="sm:col-span-4 p-4 rounded-xl bg-slate-50 border border-slate-200 flex flex-col items-center justify-center">
+            <div class="relative w-24 h-24 flex items-center justify-center">
+              <svg class="w-24 h-24 -rotate-90" viewBox="0 0 80 80">
+                <circle cx="40" cy="40" r="34" stroke="#e2e8f0" stroke-width="7" fill="none" />
+                <circle cx="40" cy="40" r="34" stroke="${scoreColor}" stroke-width="7" fill="none"
+                  stroke-linecap="round"
+                  stroke-dasharray="${ringCircumference.toFixed(1)}"
+                  stroke-dashoffset="${ringOffset.toFixed(1)}" />
+              </svg>
+              <div class="absolute text-center">
+                <span class="text-2xl font-extrabold font-mono" style="color:${scoreColor}">${pr.risk_score}</span>
+                <span class="block text-[9px] font-bold text-slate-400 uppercase">/ 100</span>
+              </div>
             </div>
-            <span class="text-[11px] font-medium ${pr.risk_score <= 35 ? 'text-emerald-600' : 'text-rose-600'}">
-              ${pr.risk_score <= 35 ? 'Within safe limit (≤35)' : 'Above safe limit'}
+            <span class="text-[11px] font-semibold mt-1 ${pr.risk_score <= 35 ? 'text-emerald-600' : pr.risk_score <= 65 ? 'text-amber-600' : 'text-rose-600'}">
+              ${pr.risk_score <= 35 ? 'Safe (≤35)' : pr.risk_score <= 65 ? 'Review Required' : 'High Risk (≥70)'}
             </span>
           </div>
 
-          <div class="p-4 rounded-xl bg-slate-50 border border-slate-200">
-            <span class="text-[10px] font-bold text-slate-500 uppercase">Affected Services</span>
-            <p class="text-xl font-bold text-slate-900 mt-1">${pr.blast_radius.total_downstream} Services</p>
-            <p class="text-xs text-rose-600 font-semibold">Criticality: ${pr.blast_radius.max_sla_tier}</p>
-            <p class="text-[10px] text-slate-500 truncate mt-1">${pr.blast_radius.affected_services.join(', ')}</p>
-          </div>
-
-          <div class="p-4 rounded-xl bg-slate-50 border border-slate-200">
-            <span class="text-[10px] font-bold text-slate-500 uppercase">Code Changes</span>
-            <p class="text-xs font-mono text-slate-700 mt-1.5">Diff: <span class="text-emerald-600 font-semibold">+${pr.additions}</span> <span class="text-rose-600 font-semibold">-${pr.deletions}</span></p>
-            <p class="text-xs text-slate-600 mt-1">Breaking APIs: <strong class="${pr.ast_summary.breaking_changes > 0 ? 'text-rose-600' : 'text-slate-900'}">${pr.ast_summary.breaking_changes}</strong></p>
-            <p class="text-[10px] text-slate-500 mt-1">Files: ${pr.changed_files}</p>
+          <div class="sm:col-span-8 p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-2.5 text-xs">
+            <div class="flex items-center justify-between text-[11px] font-bold text-slate-500 uppercase">
+              <span>Weighted Risk Signals</span>
+              <span>${pr.blast_radius.total_downstream} Services · ${pr.blast_radius.max_sla_tier}</span>
+            </div>
+            ${[
+              { label: "AST Structural Diff (40%)", val: sig.ast },
+              { label: "Blast Radius Impact (30%)", val: sig.blast },
+              { label: "Critical Path Sensitivity (20%)", val: sig.critical_path },
+              { label: "Test Coverage Gap (10%)", val: sig.test_gap }
+            ].map(s => {
+              const barCol = s.val <= 35 ? "bg-emerald-500" : s.val <= 65 ? "bg-amber-500" : "bg-rose-500";
+              return `
+                <div class="space-y-1">
+                  <div class="flex justify-between text-[11px] text-slate-700">
+                    <span>${s.label}</span>
+                    <span class="font-mono font-semibold">${s.val}%</span>
+                  </div>
+                  <div class="w-full h-1.5 bg-slate-200 rounded-full overflow-hidden">
+                    <div class="h-full ${barCol} rounded-full" style="width:${s.val}%"></div>
+                  </div>
+                </div>
+              `;
+            }).join("")}
           </div>
         </div>
 
-        <div class="p-4 rounded-xl ${pr.risk_level === 'BLOCK' ? 'bg-rose-50 border border-rose-200' : 'bg-indigo-50/70 border border-indigo-200'} space-y-1">
-          <span class="text-xs font-bold ${pr.risk_level === 'BLOCK' ? 'text-rose-700' : 'text-indigo-700'}">Safety Summary</span>
-          <p class="text-xs text-slate-700 leading-relaxed font-medium">${pr.plain_explanation}</p>
+        <!-- Affected Services Pills + Code/AST Diff Preview -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div class="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-2">
+            <span class="text-[10px] font-bold text-slate-500 uppercase">Affected Downstream Services</span>
+            <div class="flex flex-wrap gap-1.5">
+              ${pr.blast_radius.affected_services.map(svc => `
+                <span class="px-2 py-0.5 rounded-md bg-white border border-slate-200 text-[11px] font-mono text-slate-800">${svc}</span>
+              `).join("")}
+            </div>
+            ${incidents.length ? `
+              <div class="pt-1.5 border-t border-slate-200 text-[11px] text-amber-700 font-medium">
+                ⚠ Incident match: <span class="font-mono font-bold">${incidents[0].id}</span> (${incidents[0].similarity}% sim) — ${incidents[0].title}
+              </div>
+            ` : `<div class="pt-1.5 border-t border-slate-200 text-[11px] text-emerald-700">✓ No matching past production incidents</div>`}
+          </div>
+
+          <div class="p-3.5 rounded-xl bg-slate-900 border border-slate-800 space-y-1.5 font-mono text-[11px]">
+            <span class="text-[10px] font-sans font-bold text-slate-400 uppercase block">AST Diff Inspection (+${pr.additions} / -${pr.deletions})</span>
+            ${diffLines.map(l => {
+              const cls = l.type === "add" ? "text-emerald-400" : l.type === "del" ? "text-rose-400" : "text-slate-400";
+              return `<div class="${cls} truncate">${l.text}</div>`;
+            }).join("")}
+          </div>
+        </div>
+
+        <div class="p-4 rounded-xl ${pr.risk_level === 'BLOCK' ? 'bg-rose-50 border border-rose-200' : pr.risk_level === 'WARN' ? 'bg-amber-50 border border-amber-200' : 'bg-emerald-50/70 border border-emerald-200'} space-y-1">
+          <span class="text-xs font-bold ${pr.risk_level === 'BLOCK' ? 'text-rose-700' : pr.risk_level === 'WARN' ? 'text-amber-800' : 'text-emerald-800'}">Gate Verdict & Recommendation</span>
+          <p class="text-xs text-slate-800 leading-relaxed font-medium">${pr.plain_explanation}</p>
           <p class="text-[11px] text-slate-600 leading-relaxed pt-1 border-t border-slate-200/70">${pr.rationale}</p>
+        </div>
+
+        <div id="scan-progress-bar" class="hidden p-3 rounded-xl bg-indigo-50 border border-indigo-200 text-xs text-indigo-800 font-medium">
+          ⏳ Running pipeline: Parsing Diff → AST Symbols → Blast Radius Graph → Gate Decision...
         </div>
 
         <div class="pt-2 flex flex-col sm:flex-row items-center justify-between gap-3 border-t border-slate-200">
@@ -1172,14 +1279,16 @@
             <button onclick="rescanActivePR()" class="px-3.5 py-2 rounded-lg bg-white hover:bg-slate-50 text-indigo-600 border border-slate-300 font-semibold transition">
               Scan PR
             </button>
-            <a href="https://github.com/${STATE.activeRepo}/pull/${pr.pr_number}" target="_blank" class="px-3.5 py-2 rounded-lg bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 font-medium transition">
-              ↗ View on GitHub
-            </a>
+            <button onclick="switchTab('blast')" class="px-3.5 py-2 rounded-lg bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 font-medium transition">
+              View Impact Map
+            </button>
           </div>
 
           <div class="flex items-center space-x-2 w-full sm:w-auto justify-end">
             ${
-              pr.risk_level === 'BLOCK'
+              pr.decision === 'MERGED'
+                ? `<span class="px-4 py-2 rounded-lg text-xs font-bold bg-indigo-100 text-indigo-700">✓ Merged</span>`
+                : pr.risk_level === 'BLOCK'
                 ? `<button onclick="triggerActivePRMerge(true)" class="px-4 py-2 rounded-lg text-xs font-semibold bg-rose-600 hover:bg-rose-700 text-white transition">
                      Override & Merge
                    </button>`
@@ -1198,6 +1307,8 @@
       const [owner, repo] = STATE.activeRepo.split("/");
       showToast(`Scanning ${STATE.activeRepo}#${pr.pr_number}...`);
 
+      const prog = document.getElementById("scan-progress-bar");
+      if (prog) prog.classList.remove("hidden");
       const out = document.getElementById("test-output-log");
       if (out) {
         out.classList.remove("hidden");
