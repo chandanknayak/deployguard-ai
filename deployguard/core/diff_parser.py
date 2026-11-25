@@ -153,6 +153,7 @@ class DiffParser:
         current_hunk_lines: list[int] = []
         current_hunk_start: int = 0
         line_cursor: int = 0  # current line number in the *new* file within a hunk
+        hunk_new_remaining: int = 0
 
         i = 0
         try:
@@ -169,6 +170,7 @@ class DiffParser:
                             self._build_hunk(current_hunk_start, current_hunk_lines)
                         )
                         current_hunk_lines = []
+                    hunk_new_remaining = 0
 
                     current_file = self._parse_diff_header(line)
                     file_diffs.append(current_file)
@@ -230,10 +232,13 @@ class DiffParser:
                     match = _HUNK_HEADER_RE.match(line)
                     if not match:
                         logger.warning("Could not parse hunk header: %r — skipping.", line)
+                        hunk_new_remaining = 0
                         i += 1
                         continue
 
                     new_start = int(match.group("new_start"))
+                    new_count_str = match.group("new_count")
+                    hunk_new_remaining = int(new_count_str) if new_count_str is not None else 1
                     current_hunk_start = new_start
                     line_cursor = new_start
                     i += 1
@@ -255,16 +260,25 @@ class DiffParser:
                     # Added line — record it and advance the new-file cursor
                     current_hunk_lines.append(line_cursor)
                     line_cursor += 1
+                    if hunk_new_remaining > 0:
+                        hunk_new_remaining -= 1
 
                 elif line.startswith(_REMOVED_PREFIX):
                     # Removed line — does NOT advance the new-file cursor
                     pass
 
-                elif line.startswith(_CONTEXT_PREFIX) or line == "":
-                    # Context line — advance the new-file cursor
-                    if current_hunk_lines or True:  # always track for range continuity
+                elif line.startswith(_CONTEXT_PREFIX):
+                    # Context line — advance the new-file cursor within hunk
+                    if hunk_new_remaining > 0:
                         current_hunk_lines.append(line_cursor)
+                        line_cursor += 1
+                        hunk_new_remaining -= 1
+
+                elif line == "" and hunk_new_remaining > 0:
+                    # Blank context line inside a hunk (trailing space stripped)
+                    current_hunk_lines.append(line_cursor)
                     line_cursor += 1
+                    hunk_new_remaining -= 1
 
                 i += 1
 

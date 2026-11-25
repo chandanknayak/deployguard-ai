@@ -15,8 +15,6 @@ import pytest
 from deployguard.db.client import MongoDBClient
 from deployguard.db.db_operations import (
     BlastRadiusResult,
-    IncidentRecord,
-    ServiceNode,
     find_similar_incidents,
     get_blast_radius,
     save_risk_assessment,

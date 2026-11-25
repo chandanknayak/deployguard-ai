@@ -130,6 +130,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         settings.supported_ast_languages,
         settings.max_diff_files,
     )
+    if settings.app_env == "production" and settings.using_default_secrets:
+        logger.warning(
+            "⚠️  SECURITY WARNING: JWT_SECRET_KEY / TOKEN_ENCRYPTION_KEY are using default dev values in production! "
+            "Set strong random keys in your environment."
+        )
 
     # Initialize MongoDB client
     try:
@@ -220,19 +225,22 @@ def create_app() -> FastAPI:
     app.include_router(auth_router.router)
     app.include_router(repos_router.router)
 
-    # -----------------------------------------------------------------------
-    # Web App UI (Single Page Application)
-    # -----------------------------------------------------------------------
+    # Serve static SPA assets cleanly (index.html, app.js, styles.css)
     _static_dir = Path(__file__).resolve().parent.parent / "static"
 
     @app.get("/", include_in_schema=False)
     @app.get("/app", include_in_schema=False)
+    @app.get("/demo", include_in_schema=False)
     async def serve_webapp() -> Response:
-        """Serve the modern DeployGuard AI Enterprise Web Application."""
+        """Serve the DeployGuard AI Enterprise Web Application."""
         index_file = _static_dir / "index.html"
         if index_file.exists():
             return FileResponse(str(index_file), media_type="text/html")
         return JSONResponse({"status": "ok", "service": settings.app_name})
+
+    from fastapi.staticfiles import StaticFiles
+    if _static_dir.exists():
+        app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
 
     # -----------------------------------------------------------------------
     # Health & Observability Endpoints

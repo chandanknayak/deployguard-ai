@@ -16,12 +16,10 @@ import pytest
 from pydantic import ValidationError
 
 from deployguard.agent.risk_agent import (
-    AffectedServiceSummary,
     DeploymentStrategy,
     RiskAssessment,
     RiskAssessmentAgent,
     RiskLevel,
-    _build_system_prompt,
     _build_user_message,
 )
 from deployguard.db.db_operations import BlastRadiusResult, IncidentRecord, ServiceNode

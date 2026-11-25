@@ -62,13 +62,16 @@ def load_env() -> dict[str, str]:
 
 
 def check_env_vars(env: dict[str, str]) -> bool:
-    """Check required environment variables."""
+    """Check required and optional environment variables."""
     header("Step 1 — Environment Variables (.env)")
     required = {
         "GITHUB_WEBHOOK_SECRET": "Secret for HMAC signature verification",
         "GITHUB_API_TOKEN": "GitHub PAT with repo + statuses + pull_requests scopes",
         "MONGODB_URI": "MongoDB Atlas connection string (mongodb+srv://...)",
-        "OPENAI_API_KEY": "OpenAI API key (sk-proj-...)",
+    }
+    optional = {
+        "OPENAI_API_KEY": "Optional OpenAI API key (deterministic AST engine works without it)",
+        "JWT_SECRET_KEY": "Strong HMAC secret for workspace JWT auth",
     }
     all_ok = True
     for key, desc in required.items():
@@ -78,6 +81,12 @@ def check_env_vars(env: dict[str, str]) -> bool:
         else:
             err(f"{key} — MISSING or placeholder  ({desc})")
             all_ok = False
+    for key, desc in optional.items():
+        val = env.get(key, os.environ.get(key, ""))
+        if val and not val.startswith("<") and "xxxx" not in val and "replace-with" not in val:
+            ok(f"{key} — set ✓")
+        else:
+            warn(f"{key} — not set ({desc})")
     return all_ok
 
 
@@ -88,10 +97,8 @@ def check_dependencies() -> None:
         "fastapi": "FastAPI web framework",
         "uvicorn": "ASGI server",
         "motor": "Async MongoDB driver",
-        "openai": "OpenAI SDK",
+        "openai": "OpenAI SDK (optional enrichment)",
         "httpx": "Async HTTP client",
-        "streamlit": "Dashboard UI",
-        "plotly": "Charts",
     }
     for pkg, desc in packages.items():
         try:
@@ -162,24 +169,21 @@ def print_summary() -> None:
     """Print the complete quick-start summary."""
     header("Quick-Start Checklist")
     print("""
-  Terminal 1 — API Server:
+  Terminal 1 — FastAPI + Built-in Web UI (http://localhost:8080):
     python -m uvicorn deployguard.api.main:app --host 0.0.0.0 --port 8080 --reload
 
-  Terminal 2 — ngrok tunnel:
+  Terminal 2 — Optional Tunnel (for local GitHub webhooks):
     ngrok http 8080
 
-  Terminal 3 — Streamlit Dashboard:
-    streamlit run dashboard/app.py
-
   GitHub:
-    Paste the ngrok URL into GitHub Webhooks as:
-    https://xxxx.ngrok-free.app/webhook/github
+    Paste the tunnel/public URL into GitHub Webhooks as:
+    https://your-domain.com/webhook/github
 
   Seed MongoDB (first time only):
     python scripts/seed_graph.py
     python scripts/ingest_incidents.py
 
-  Then open a PR in your repo — results appear in the dashboard automatically!
+  Or simply sign into the Web UI → Tab 1 (Setup & Team) → Create & Seed Real GitHub Repo!
 """)
 
 

@@ -1,10 +1,9 @@
 """
-api/routers/webhook.py — GitHub Webhook Ingestion Router.
+api/routers/webhook.py — Multi-Tenant GitHub Webhook Ingestion Router.
 
 Validates HMAC-SHA256 webhook signatures, acknowledges valid Pull Request events
-with HTTP 202 Accepted immediately (<10s Render/GitHub timeout window), queues
-the queued status into MongoDB, and runs the full deterministic + optional AI
-analysis pipeline asynchronously.
+with HTTP 202 Accepted immediately, resolves matching tenant workspace & encrypted
+token if connected in MongoDB, and runs the full deterministic + optional AI pipeline.
 """
 
 from __future__ import annotations
@@ -12,12 +11,13 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 
 from deployguard.config import settings
+from deployguard.core.crypto import decrypt_secret
 from deployguard.core.pipeline import persist_or_update_assessment, run_pr_analysis
 from deployguard.core.security import extract_event_type, verify_github_signature
 from deployguard.db.client import MongoDBClient
@@ -38,10 +38,6 @@ _SUPPORTED_EVENT: str = "pull_request"
 @router.post(
     "/github",
     summary="GitHub Pull Request Webhook Receiver",
-    description=(
-        "Receives GitHub pull_request webhook events, verifies the HMAC-SHA256 "
-        "signature, and queues the DeployGuard analysis pipeline asynchronously."
-    ),
     status_code=status.HTTP_202_ACCEPTED,
 )
 async def github_webhook(
@@ -83,6 +79,9 @@ async def github_webhook(
     except WebhookSignatureError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
 
+    if event_type == "ping":
+        return JSONResponse(status_code=status.HTTP_200_OK, content={"status": "pong", "delivery_id": delivery_id})
+
     if event_type != _SUPPORTED_EVENT:
         return JSONResponse(
             status_code=status.HTTP_200_OK,
@@ -117,7 +116,8 @@ async def github_webhook(
     db_client: MongoDBClient | None = getattr(request.app.state, "db", None)
     agent = getattr(request.app.state, "agent", None)
 
-    # Record QUEUED placeholder immediately for UI status tracking & cold-start resiliency
+    workspace_ctx = await _resolve_repo_workspace(db_client, payload.repository.full_name)
+
     queued_record = AnalysisResult(
         assessment_id=assessment_id,
         pr_number=payload.number,
@@ -126,6 +126,8 @@ async def github_webhook(
         risk_level=RiskLevel.UNKNOWN,
         source="GITHUB_WEBHOOK",
         status="QUEUED",
+        owner_email=workspace_ctx.get("owner_email"),
+        workspace_id=workspace_ctx.get("workspace_id"),
     ).model_dump()
     queued_record.update({
         "pr_title": payload.pull_request.title,
@@ -141,6 +143,7 @@ async def github_webhook(
         delivery_id=delivery_id,
         db_client=db_client,
         agent=agent,
+        workspace_ctx=workspace_ctx,
     )
 
     logger.info(
@@ -164,23 +167,63 @@ async def github_webhook(
     )
 
 
+async def _resolve_repo_workspace(
+    db_client: MongoDBClient | None,
+    repo_full_name: str,
+) -> dict[str, Any]:
+    """Find workspace/tenant owning ``repo_full_name`` to fetch its encrypted PAT & policy."""
+    if db_client is None or getattr(db_client, "db", None) is None:
+        return {}
+    try:
+        ws = await db_client.db["workspaces"].find_one({"connected_repos.full_name": repo_full_name})
+        if ws:
+            raw_tok = ws.get("github_access_token")
+            tok = decrypt_secret(raw_tok) if raw_tok else None
+            policy = await db_client.db["enterprise_policy"].find_one({"workspace_id": ws["workspace_id"]})
+            return {
+                "workspace_id": ws.get("workspace_id"),
+                "owner_email": ws.get("owner_email"),
+                "github_token": tok,
+                "policy": policy or {},
+            }
+        user = await db_client.db["users"].find_one({"connected_repos.full_name": repo_full_name})
+        if user:
+            raw_tok = user.get("github_access_token")
+            tok = decrypt_secret(raw_tok) if raw_tok else None
+            return {
+                "workspace_id": user.get("workspace_id"),
+                "owner_email": user.get("email"),
+                "github_token": tok,
+                "policy": {},
+            }
+    except Exception as exc:
+        logger.debug("Workspace lookup skipped for webhook %s: %s", repo_full_name, exc)
+    return {}
+
+
 async def _run_analysis_pipeline(
     payload: GitHubPullRequestPayload,
     assessment_id: str,
     delivery_id: str,
     db_client: MongoDBClient | None = None,
     agent=None,
+    workspace_ctx: dict[str, Any] | None = None,
 ) -> None:
     """Execute full deterministic + optional LLM PR analysis asynchronously."""
     pr = payload.pull_request
     repo = payload.repository.full_name
+    ctx = workspace_ctx or {}
     await run_pr_analysis(
         repo_full_name=repo,
         pr_number=pr.number,
         source="GITHUB_WEBHOOK",
+        github_token=ctx.get("github_token"),
         db_client=db_client,
         agent=agent,
+        owner_email=ctx.get("owner_email"),
+        workspace_id=ctx.get("workspace_id"),
         assessment_id=assessment_id,
+        policy=ctx.get("policy"),
         post_to_github=True,
         pr_title_hint=pr.title,
         pr_author_hint=pr.user.login,

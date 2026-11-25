@@ -209,6 +209,10 @@ class AnalysisResult(BaseModel):
         default=None,
         description="Tenant email that initiated the scan (for multi-tenant isolation).",
     )
+    workspace_id: str | None = Field(
+        default=None,
+        description="Organization workspace ID owning this assessment.",
+    )
     is_docs_or_config_only: bool = Field(
         default=False,
         description="True if PR modifies only docs/assets/non-runtime files.",

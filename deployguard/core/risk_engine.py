@@ -25,7 +25,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from deployguard.models.analysis import FileAnalysis, RiskLevel, SymbolKind
+from deployguard.models.analysis import FileAnalysis, RiskLevel
 
 
 _DOCS_ASSET_EXTENSIONS: set[str] = {

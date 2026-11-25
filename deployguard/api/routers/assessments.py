@@ -1,26 +1,20 @@
 """
-api/routers/assessments.py — Read-side API for Risk Assessment results.
-
-Provides REST endpoints for the Streamlit dashboard (and any external
-consumer) to query completed risk assessments persisted in MongoDB.
-
-Endpoints:
-    GET /assessments/                    — Paginated list of recent assessments.
-    GET /assessments/{assessment_id}     — Single assessment by ID.
-    GET /assessments/pr/{repo}/{pr_num}  — Latest assessment for a specific PR.
-    GET /assessments/stats               — Aggregate statistics.
-    GET /assessments/live                — Server-Sent Events stream for real-time updates.
+api/routers/assessments.py — Tenant-scoped Read API for Risk Assessment results.
 """
 
 from __future__ import annotations
 
 import asyncio
+import datetime
 import json
 import logging
-from typing import AsyncIterator
+from typing import Annotated, Any, AsyncIterator
 
-from fastapi import APIRouter, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, StreamingResponse
+
+from deployguard.api.routers.auth import get_current_user
 
 logger = logging.getLogger(__name__)
 
@@ -29,9 +23,6 @@ router = APIRouter(
     tags=["Assessments"],
 )
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 def _get_collection(request: Request):
     """Return the MongoDB assessments collection from app state."""
@@ -44,36 +35,44 @@ def _get_collection(request: Request):
     return db_client.db["risk_assessments"]
 
 
-from fastapi.encoders import jsonable_encoder
-
 def _sanitize(doc: dict | list) -> Any:
-    """Recursively clean MongoDB docs (ObjectId, datetime) for JSON serialisation."""
+    """Clean MongoDB docs (ObjectId, datetime) for JSON serialisation."""
     if isinstance(doc, dict):
         doc.pop("_id", None)
     return jsonable_encoder(doc)
 
 
-# ---------------------------------------------------------------------------
-# GET /assessments/stats
-# ---------------------------------------------------------------------------
+def _tenant_scope(current_user: dict[str, Any]) -> dict[str, Any]:
+    """Build strict workspace/owner query filter preventing cross-tenant reads."""
+    ws_id = current_user.get("workspace_id")
+    email = current_user.get("email")
+    repo_names = [
+        r.get("full_name") for r in current_user.get("connected_repos", []) if r.get("full_name")
+    ]
+    clauses: list[dict[str, Any]] = []
+    if ws_id:
+        clauses.append({"workspace_id": ws_id})
+    if email:
+        clauses.append({"owner_email": email})
+    if repo_names:
+        clauses.append({"repo_full_name": {"$in": repo_names}})
+    return {"$or": clauses} if len(clauses) > 1 else (clauses[0] if clauses else {"owner_email": "__none__"})
+
 
 @router.get(
     "/stats",
-    summary="Aggregate assessment statistics",
-    description="Returns counts of PASS / WARN / BLOCK assessments (excluding simulations by default).",
+    summary="Aggregate assessment statistics for workspace",
 )
 async def get_stats(
     request: Request,
-    include_simulations: bool = Query(default=False, description="Include SIMULATION runs in production metrics"),
+    current_user: Annotated[dict[str, Any], Depends(get_current_user)],
+    include_simulations: bool = Query(default=False),
 ) -> JSONResponse:
-    """
-    Returns aggregated statistics across stored live assessments.
-    """
     col = _get_collection(request)
     try:
-        match_stage: dict = {}
+        match_stage: dict[str, Any] = _tenant_scope(current_user)
         if not include_simulations:
-            match_stage["source"] = {"$ne": "SIMULATION"}
+            match_stage = {"$and": [match_stage, {"source": {"$ne": "SIMULATION"}}]}
 
         pipeline = [
             {"$match": match_stage},
@@ -85,8 +84,7 @@ async def get_stats(
                 }
             },
         ]
-        cursor = col.aggregate(pipeline)
-        raw = await cursor.to_list(length=100)
+        raw = await col.aggregate(pipeline).to_list(length=100)
 
         totals = {"PASS": 0, "WARN": 0, "BLOCK": 0, "UNKNOWN": 0}
         avg_scores: dict[str, float] = {}
@@ -110,39 +108,33 @@ async def get_stats(
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
-# ---------------------------------------------------------------------------
-# GET /assessments/
-# ---------------------------------------------------------------------------
-
 @router.get(
     "/",
-    summary="List recent assessments",
-    description="Returns the most recent risk assessments, newest first.",
+    summary="List recent workspace assessments",
 )
 async def list_assessments(
     request: Request,
-    limit: int = Query(default=20, ge=1, le=100, description="Number of results to return"),
-    skip: int = Query(default=0, ge=0, description="Pagination offset"),
-    repo: str | None = Query(default=None, description="Filter by repo (e.g. acme/payment-service)"),
-    decision: str | None = Query(default=None, description="Filter by decision: PASS, WARN, BLOCK"),
-    source: str | None = Query(default=None, description="Filter by source: GITHUB_WEBHOOK, MANUAL_SCAN, SIMULATION"),
-    include_simulations: bool = Query(default=False, description="Include SIMULATION runs when source not specified"),
+    current_user: Annotated[dict[str, Any], Depends(get_current_user)],
+    limit: int = Query(default=20, ge=1, le=100),
+    skip: int = Query(default=0, ge=0),
+    repo: str | None = Query(default=None),
+    decision: str | None = Query(default=None),
+    source: str | None = Query(default=None),
+    include_simulations: bool = Query(default=False),
 ) -> JSONResponse:
-    """
-    Paginated list of risk assessments from MongoDB, sorted by creation time.
-    """
     col = _get_collection(request)
     try:
-        query: dict = {}
+        filters: list[dict[str, Any]] = [_tenant_scope(current_user)]
         if repo:
-            query["repo_full_name"] = repo
+            filters.append({"repo_full_name": repo})
         if decision:
-            query["risk_level"] = decision.upper()
+            filters.append({"risk_level": decision.upper()})
         if source:
-            query["source"] = source.upper()
+            filters.append({"source": source.upper()})
         elif not include_simulations:
-            query["source"] = {"$ne": "SIMULATION"}
+            filters.append({"source": {"$ne": "SIMULATION"}})
 
+        query = {"$and": filters} if len(filters) > 1 else filters[0]
         cursor = col.find(query, {"_id": 0}).sort("created_at", -1).skip(skip).limit(limit)
         docs = await cursor.to_list(length=limit)
         total = await col.count_documents(query)
@@ -158,60 +150,64 @@ async def list_assessments(
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
-# ---------------------------------------------------------------------------
-# GET /assessments/{assessment_id}
-# ---------------------------------------------------------------------------
-
 @router.get(
-    "/{assessment_id}",
-    summary="Get assessment by ID",
-    description="Fetches a single risk assessment record by its UUID.",
+    "/live",
+    summary="Real-time SSE stream of workspace assessments",
+    response_class=StreamingResponse,
 )
-async def get_assessment(request: Request, assessment_id: str) -> JSONResponse:
-    """Return one assessment document from MongoDB."""
+async def live_assessments(
+    request: Request,
+    current_user: Annotated[dict[str, Any], Depends(get_current_user)],
+) -> StreamingResponse:
     col = _get_collection(request)
-    try:
-        doc = await col.find_one({"assessment_id": assessment_id}, {"_id": 0})
-        if doc is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Assessment '{assessment_id}' not found.",
-            )
-        return JSONResponse(_sanitize(doc))
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logger.error("get_assessment(%s) failed: %s", assessment_id, exc)
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    scope = _tenant_scope(current_user)
 
+    async def event_generator() -> AsyncIterator[str]:
+        yield 'event: connected\ndata: {"status": "streaming"}\n\n'
+        since = datetime.datetime.now(datetime.timezone.utc)
 
-# ---------------------------------------------------------------------------
-# GET /assessments/pr/{repo_owner}/{repo_name}/{pr_number}
-# ---------------------------------------------------------------------------
+        recent = await col.find(scope, {"_id": 0}).sort("created_at", -1).limit(5).to_list(length=5)
+        for doc in reversed(recent):
+            yield f"event: assessment\ndata: {json.dumps(doc, default=str)}\n\n"
+
+        while True:
+            if await request.is_disconnected():
+                break
+            poll_q = {"$and": [scope, {"created_at": {"$gt": since}}]}
+            new_docs = await col.find(poll_q, {"_id": 0}).sort("created_at", 1).to_list(length=50)
+            for doc in new_docs:
+                since = doc.get("created_at", since)
+                yield f"event: assessment\ndata: {json.dumps(doc, default=str)}\n\n"
+
+            yield "event: heartbeat\ndata: {}\n\n"
+            await asyncio.sleep(2)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
 
 @router.get(
     "/pr/{repo_owner}/{repo_name}/{pr_number}",
-    summary="Get latest assessment for a specific PR",
-    description="Returns the most recent assessment for the given repo + PR number.",
+    summary="Get latest assessment for a specific workspace PR",
 )
 async def get_pr_assessment(
     request: Request,
     repo_owner: str,
     repo_name: str,
     pr_number: int,
+    current_user: Annotated[dict[str, Any], Depends(get_current_user)],
 ) -> JSONResponse:
-    """
-    Look up the latest DeployGuard assessment for a specific PR.
-    Useful for GitHub App UI integrations and status badge lookups.
-    """
     col = _get_collection(request)
     repo_full = f"{repo_owner}/{repo_name}"
     try:
-        doc = await col.find_one(
-            {"repo_full_name": repo_full, "pr_number": pr_number},
-            {"_id": 0},
-            sort=[("created_at", -1)],
-        )
+        query = {"$and": [_tenant_scope(current_user), {"repo_full_name": repo_full, "pr_number": pr_number}]}
+        doc = await col.find_one(query, {"_id": 0}, sort=[("created_at", -1)])
         if doc is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -225,67 +221,27 @@ async def get_pr_assessment(
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
-# ---------------------------------------------------------------------------
-# GET /assessments/live  — Server-Sent Events (SSE) real-time stream
-# ---------------------------------------------------------------------------
-
 @router.get(
-    "/live",
-    summary="Real-time SSE stream of new assessments",
-    description=(
-        "Server-Sent Events endpoint. The Streamlit dashboard subscribes "
-        "here to receive new assessment notifications in real time without polling."
-    ),
-    response_class=StreamingResponse,
+    "/{assessment_id}",
+    summary="Get assessment by ID",
 )
-async def live_assessments(request: Request) -> StreamingResponse:
-    """
-    Push new assessments to connected clients via SSE.
-
-    Streams the last 5 assessments on connect, then pushes new ones
-    as they arrive (polls MongoDB every 2 seconds for new documents
-    inserted since the stream started).
-    """
+async def get_assessment(
+    request: Request,
+    assessment_id: str,
+    current_user: Annotated[dict[str, Any], Depends(get_current_user)],
+) -> JSONResponse:
     col = _get_collection(request)
-
-    async def event_generator() -> AsyncIterator[str]:
-        # Send a heartbeat immediately so the browser doesn't time out
-        yield "event: connected\ndata: {\"status\": \"streaming\"}\n\n"
-
-        import datetime
-
-        since = datetime.datetime.utcnow()
-
-        # Backfill: last 5 existing assessments
-        cursor = col.find({}, {"_id": 0}).sort("created_at", -1).limit(5)
-        recent = await cursor.to_list(length=5)
-        for doc in reversed(recent):
-            payload = json.dumps(doc, default=str)
-            yield f"event: assessment\ndata: {payload}\n\n"
-
-        # Stream new assessments as they arrive
-        while True:
-            if await request.is_disconnected():
-                break
-            new_cursor = col.find(
-                {"created_at": {"$gt": since}},
-                {"_id": 0},
-            ).sort("created_at", 1)
-            new_docs = await new_cursor.to_list(length=50)
-            for doc in new_docs:
-                since = doc.get("created_at", since)
-                payload = json.dumps(doc, default=str)
-                yield f"event: assessment\ndata: {payload}\n\n"
-
-            # Heartbeat to keep connection alive
-            yield "event: heartbeat\ndata: {}\n\n"
-            await asyncio.sleep(2)
-
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-        },
-    )
+    try:
+        query = {"$and": [_tenant_scope(current_user), {"assessment_id": assessment_id}]}
+        doc = await col.find_one(query, {"_id": 0})
+        if doc is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Assessment '{assessment_id}' not found.",
+            )
+        return JSONResponse(_sanitize(doc))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("get_assessment(%s) failed: %s", assessment_id, exc)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc

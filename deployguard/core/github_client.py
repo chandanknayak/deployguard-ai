@@ -20,8 +20,9 @@ Design decisions:
 
 from __future__ import annotations
 
+import base64
 import logging
-from typing import Final
+from typing import Any, Final
 
 import httpx
 
@@ -161,7 +162,7 @@ class GitHubClient:
                 return None
             raise
 
-    async def get_repo_python_files(self, ref: str, max_files: int = 12) -> list[str]:
+    async def get_repo_python_files(self, ref: str, max_files: int = 25) -> list[str]:
         """List up to ``max_files`` Python source paths from the repo tree at ``ref``."""
         try:
             url = f"{self._base_url}/repos/{self._repo}/git/trees/{ref}"
@@ -179,6 +180,158 @@ class GitHubClient:
         except Exception as exc:
             logger.debug("Could not list repo tree for %s@%s: %s", self._repo, ref[:8], exc)
             return []
+
+    async def create_repository(
+        self,
+        name: str,
+        description: str = "DeployGuard AI Sandbox Microservice",
+        private: bool = False,
+        auto_init: bool = True,
+    ) -> dict[str, Any]:
+        """Create a repository under the authenticated GitHub user."""
+        url = f"{self._base_url}/user/repos"
+        response = await self._post(
+            url,
+            json_data={
+                "name": name,
+                "description": description,
+                "private": private,
+                "auto_init": auto_init,
+            },
+        )
+        return response.json()
+
+    async def get_branch_sha(self, branch: str = "main") -> str:
+        """Return head commit SHA for a branch."""
+        url = f"{self._base_url}/repos/{self._repo}/git/ref/heads/{branch}"
+        response = await self._get(url, accept=_ACCEPT_JSON)
+        return response.json()["object"]["sha"]
+
+    async def create_branch(self, branch_name: str, from_sha: str) -> dict[str, Any]:
+        """Create a new git branch ref from a base SHA."""
+        url = f"{self._base_url}/repos/{self._repo}/git/refs"
+        response = await self._post(
+            url,
+            json_data={"ref": f"refs/heads/{branch_name}", "sha": from_sha},
+        )
+        return response.json()
+
+    async def get_file_sha(self, file_path: str, ref: str) -> str | None:
+        """Return blob SHA for a file at ``ref``, or None if missing."""
+        try:
+            url = f"{self._base_url}/repos/{self._repo}/contents/{file_path}"
+            response = await self._get(url, accept=_ACCEPT_JSON, params={"ref": ref})
+            data = response.json()
+            return data.get("sha") if isinstance(data, dict) else None
+        except GitHubAPIError as exc:
+            if exc.status_code == 404:
+                return None
+            raise
+
+    async def create_or_update_file(
+        self,
+        file_path: str,
+        content: str,
+        message: str,
+        branch: str,
+        sha: str | None = None,
+    ) -> dict[str, Any]:
+        """Create or update a file directly on a branch via GitHub Contents API."""
+        url = f"{self._base_url}/repos/{self._repo}/contents/{file_path}"
+        if sha is None:
+            sha = await self.get_file_sha(file_path, branch)
+        payload: dict[str, Any] = {
+            "message": message,
+            "content": base64.b64encode(content.encode("utf-8")).decode("ascii"),
+            "branch": branch,
+        }
+        if sha:
+            payload["sha"] = sha
+        response = await self._put(url, json_data=payload)
+        return response.json()
+
+    async def create_pull_request(
+        self,
+        title: str,
+        head: str,
+        base: str = "main",
+        body: str = "",
+    ) -> dict[str, Any]:
+        """Open a real Pull Request on GitHub."""
+        url = f"{self._base_url}/repos/{self._repo}/pulls"
+        response = await self._post(
+            url,
+            json_data={"title": title, "head": head, "base": base, "body": body},
+        )
+        return response.json()
+
+    async def create_pr_review(
+        self,
+        pr_number: int,
+        event: str,
+        body: str = "",
+    ) -> dict[str, Any]:
+        """Submit a real GitHub PR Review (APPROVE | REQUEST_CHANGES | COMMENT)."""
+        url = f"{self._base_url}/repos/{self._repo}/pulls/{pr_number}/reviews"
+        payload: dict[str, str] = {"event": event.upper()}
+        if body:
+            payload["body"] = body
+        response = await self._post(url, json_data=payload)
+        return response.json()
+
+    async def list_pr_reviews(self, pr_number: int) -> list[dict[str, Any]]:
+        """List reviews submitted on a Pull Request."""
+        url = f"{self._base_url}/repos/{self._repo}/pulls/{pr_number}/reviews"
+        response = await self._get(url, accept=_ACCEPT_JSON, params={"per_page": 30})
+        data = response.json()
+        return data if isinstance(data, list) else []
+
+    async def list_collaborators(self) -> list[dict[str, Any]]:
+        """List repository collaborators and their GitHub permissions."""
+        url = f"{self._base_url}/repos/{self._repo}/collaborators"
+        response = await self._get(url, accept=_ACCEPT_JSON, params={"per_page": 50})
+        data = response.json()
+        return data if isinstance(data, list) else []
+
+    async def add_collaborator(self, username: str, permission: str = "push") -> dict[str, Any]:
+        """Invite a GitHub collaborator with permission: pull | push | maintain | admin."""
+        url = f"{self._base_url}/repos/{self._repo}/collaborators/{username}"
+        response = await self._put(url, json_data={"permission": permission})
+        if response.status_code == 204 or not response.text.strip():
+            return {"username": username, "permission": permission, "status": "already_collaborator"}
+        return response.json()
+
+    async def remove_collaborator(self, username: str) -> None:
+        """Remove a collaborator from the GitHub repository."""
+        if self._client is None:
+            raise RuntimeError("GitHubClient must be used as an async context manager.")
+        url = f"{self._base_url}/repos/{self._repo}/collaborators/{username}"
+        response = await self._client.delete(url, headers={"Accept": _ACCEPT_JSON})
+        self._check_rate_limit(response)
+        if response.is_error:
+            self._handle_error(response, url)
+
+    async def ensure_webhook(self, webhook_url: str, secret: str) -> dict[str, Any]:
+        """Create or update the DeployGuard pull_request webhook on the repository."""
+        hooks_url = f"{self._base_url}/repos/{self._repo}/hooks"
+        existing_resp = await self._get(hooks_url, accept=_ACCEPT_JSON)
+        hooks = existing_resp.json() if isinstance(existing_resp.json(), list) else []
+        existing = next(
+            (h for h in hooks if "/webhook/github" in str((h.get("config") or {}).get("url", ""))),
+            None,
+        )
+        cfg = {
+            "url": webhook_url,
+            "content_type": "json",
+            "secret": secret,
+            "insecure_ssl": "0",
+        }
+        payload = {"name": "web", "active": True, "events": ["pull_request"], "config": cfg}
+        if existing and existing.get("id"):
+            resp = await self._patch(f"{hooks_url}/{existing['id']}", json_data={"active": True, "events": ["pull_request"], "config": cfg})
+            return resp.json()
+        resp = await self._post(hooks_url, json_data=payload)
+        return resp.json()
 
     async def create_check_run(
         self,

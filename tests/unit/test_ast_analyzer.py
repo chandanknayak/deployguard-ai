@@ -276,8 +276,6 @@ class TestFastAPIRouteDetection:
 
     def test_has_api_changes_flag(self) -> None:
         """FileAnalysis.has_api_changes should be True when route handlers are affected."""
-        from deployguard.models.analysis import FileAnalysis, SymbolKind
-
         affected = self.analyzer.analyze(FASTAPI_SOURCE, "api.py", {7})
         assert any(s.kind == SymbolKind.FASTAPI_ROUTE for s in affected)
 

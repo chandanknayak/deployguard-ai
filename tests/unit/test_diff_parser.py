@@ -12,10 +12,7 @@ Tests cover:
 
 from __future__ import annotations
 
-import pytest
-
-from deployguard.core.diff_parser import DiffParser, FileDiff, parse_diff
-from deployguard.exceptions import DiffParseError
+from deployguard.core.diff_parser import DiffParser, parse_diff
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -223,4 +220,17 @@ class TestDiffParserEdgeCases:
         line_range = hunk.line_range
         assert line_range.start == hunk.start_line
         assert line_range.stop == hunk.end_line + 1
+
+    def test_trailing_blank_lines_after_hunk_are_ignored(self) -> None:
+        diff_with_trailing = (
+            "diff --git a/app.py b/app.py\n"
+            "--- a/app.py\n"
+            "+++ b/app.py\n"
+            "@@ -1,1 +1,2 @@\n"
+            " def ok():\n"
+            "+    return 1\n"
+            "\n\n\n"
+        )
+        result = parse_diff(diff_with_trailing)
+        assert result[0].all_modified_lines == {1, 2}
 

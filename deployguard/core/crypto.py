@@ -18,6 +18,8 @@ import os
 import secrets
 from typing import Final
 
+from deployguard.config import settings
+
 _PREFIX: Final[str] = "enc:v1:"
 _DEFAULT_DEV_KEY: Final[str] = "deployguard-secret-change-in-prod-32chars"
 
@@ -27,6 +29,8 @@ def _get_master_secret() -> bytes:
     raw = (
         os.environ.get("TOKEN_ENCRYPTION_KEY")
         or os.environ.get("JWT_SECRET_KEY")
+        or settings.token_encryption_key.get_secret_value()
+        or settings.jwt_secret_key.get_secret_value()
         or _DEFAULT_DEV_KEY
     )
     return raw.encode("utf-8")

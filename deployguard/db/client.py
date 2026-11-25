@@ -36,7 +36,7 @@ Usage (FastAPI lifespan)::
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 try:
     from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase

@@ -626,11 +626,18 @@ async def ensure_indexes(db_client: MongoDBClient) -> None:
         (db_client.assessments, [("repo_full_name", 1), ("pr_number", 1), ("created_at", -1)], {"name": "idx_repo_pr_time"}),
         (db_client.assessments, [("source", 1), ("created_at", -1)], {"name": "idx_source_time"}),
         (db_client.assessments, [("owner_email", 1), ("created_at", -1)], {"name": "idx_owner_time"}),
+        (db_client.assessments, [("workspace_id", 1), ("created_at", -1)], {"name": "idx_assess_ws_time"}),
         (db_client.db["users"], [("email", 1)], {"unique": True, "name": "idx_user_email_unique"}),
+        (db_client.db["users"], [("workspace_id", 1)], {"name": "idx_user_workspace"}),
+        (db_client.db["workspaces"], [("workspace_id", 1)], {"unique": True, "name": "idx_workspace_id_unique"}),
+        (db_client.db["enterprise_policy"], [("workspace_id", 1)], {"name": "idx_policy_ws"}),
         (db_client.db["enterprise_policy"], [("owner_email", 1)], {"name": "idx_policy_owner"}),
+        (db_client.db["audit_log"], [("workspace_id", 1), ("timestamp", -1)], {"name": "idx_audit_ws_time"}),
         (db_client.db["audit_log"], [("owner_email", 1), ("timestamp", -1)], {"name": "idx_audit_owner_time"}),
         (db_client.db["audit_log"], [("repo", 1), ("timestamp", -1)], {"name": "idx_audit_repo_time"}),
+        (db_client.db["deployments"], [("workspace_id", 1), ("timestamp", -1)], {"name": "idx_deploy_ws_time"}),
         (db_client.db["deployments"], [("owner_email", 1), ("timestamp", -1)], {"name": "idx_deploy_owner_time"}),
+        (db_client.db["pr_reviews"], [("repo_full_name", 1), ("pr_number", 1), ("timestamp", -1)], {"name": "idx_review_repo_pr"}),
     ]
 
     for col, keys, kwargs in index_specs:
@@ -638,4 +645,76 @@ async def ensure_indexes(db_client: MongoDBClient) -> None:
             await col.create_index(keys, **kwargs)
         except Exception as exc:
             logger.debug("Skipping index %s: %s", kwargs.get("name"), exc)
+
+
+async def seed_repo_graph_nodes(
+    db_client: MongoDBClient | None,
+    repo_full_name: str,
+) -> None:
+    """
+    Ensure a service dependency graph subtree exists in MongoDB `code_graph`
+    for a connected/created demo repository so $graphLookup blast radius works live.
+    """
+    if db_client is None or getattr(db_client, "db", None) is None:
+        return
+    service_name = repo_full_name.split("/")[-1].lower()
+    existing = await db_client.code_graph.find_one({"service_name": service_name})
+    if existing:
+        return
+
+    nodes = [
+        {
+            "service_name": service_name,
+            "symbol": f"{service_name}.process_charge_v1",
+            "sla_tier": "P0",
+            "owner_team": "payments-core",
+            "on_call_email": "payments-oncall@deployguard.local",
+            "language": "python",
+            "repo": repo_full_name,
+            "status": "active",
+            "downstream_services": [f"{service_name}-checkout", f"{service_name}-ledger"],
+        },
+        {
+            "service_name": f"{service_name}-checkout",
+            "symbol": "routes.checkout.pay",
+            "sla_tier": "P0",
+            "owner_team": "checkout-team",
+            "on_call_email": "checkout-oncall@deployguard.local",
+            "language": "python",
+            "repo": repo_full_name,
+            "status": "active",
+            "downstream_services": [f"{service_name}-notifications"],
+        },
+        {
+            "service_name": f"{service_name}-ledger",
+            "symbol": "ledger.record_settlement",
+            "sla_tier": "P1",
+            "owner_team": "billing-infra",
+            "on_call_email": "billing-oncall@deployguard.local",
+            "language": "python",
+            "repo": repo_full_name,
+            "status": "active",
+            "downstream_services": [],
+        },
+        {
+            "service_name": f"{service_name}-notifications",
+            "symbol": "notifier.send_receipt",
+            "sla_tier": "P2",
+            "owner_team": "comms",
+            "on_call_email": "comms@deployguard.local",
+            "language": "python",
+            "repo": repo_full_name,
+            "status": "active",
+            "downstream_services": [],
+        },
+    ]
+    for node in nodes:
+        try:
+            await db_client.code_graph.update_one(
+                {"service_name": node["service_name"]},
+                {"$setOnInsert": node},
+                upsert=True,
+            )
+        except Exception as exc:
+            logger.debug("Skipping seed node %s: %s", node["service_name"], exc)
 

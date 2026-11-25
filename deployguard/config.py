@@ -12,7 +12,7 @@ from functools import lru_cache
 import os
 from typing import Any, Literal
 
-from pydantic import AnyHttpUrl, Field, SecretStr, field_validator
+from pydantic import AliasChoices, AnyHttpUrl, Field, SecretStr, field_validator
 
 try:
     from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -21,17 +21,21 @@ except ImportError:
 
     class BaseSettings(BaseModel):  # type: ignore[no-redef]
         def __init__(self, **values: Any) -> None:
-            # Populate from environment variables if not passed
             env_values = {}
-            for field_name in self.__class__.model_fields:
-                env_key = field_name.upper()
-                if env_key in os.environ and field_name not in values:
-                    val = os.environ[env_key]
-                    field_type = self.__class__.model_fields[field_name].annotation
-                    if field_type is SecretStr:
-                        env_values[field_name] = SecretStr(val)
-                    else:
-                        env_values[field_name] = val
+            for field_name, field_info in self.__class__.model_fields.items():
+                if field_name in values:
+                    continue
+                keys = [field_name.upper()]
+                alias = getattr(field_info, "validation_alias", None)
+                if isinstance(alias, AliasChoices):
+                    keys = [str(c).upper() for c in alias.choices]
+                for env_key in keys:
+                    if env_key in os.environ:
+                        val = os.environ[env_key]
+                        env_values[field_name] = (
+                            SecretStr(val) if field_info.annotation is SecretStr else val
+                        )
+                        break
             super().__init__(**{**env_values, **values})
 
     SettingsConfigDict = dict  # type: ignore[misc, assignment]
@@ -189,8 +193,18 @@ class Settings(BaseSettings):
     )
     openai_embedding_model: str = Field(
         default="text-embedding-3-small",
+        validation_alias=AliasChoices("OPENAI_EMBEDDING_MODEL", "EMBEDDING_MODEL"),
         description="OpenAI model used for generating incident embeddings.",
     )
+    app_host: str = Field(default="0.0.0.0", description="Bind host for ASGI server.")
+    app_port: int = Field(default=8080, ge=1, le=65535, description="Bind port for ASGI server.")
+
+    @property
+    def using_default_secrets(self) -> bool:
+        """True if JWT/token encryption still relies on public dev placeholder secrets."""
+        jwt_val = self.jwt_secret_key.get_secret_value()
+        enc_val = self.token_encryption_key.get_secret_value()
+        return jwt_val.startswith("deployguard-secret-change-in-prod") and not enc_val
     agent_max_retries: int = Field(
         default=3,
         description="Maximum retry attempts for the OpenAI agent call.",

@@ -56,7 +56,6 @@ References:
 
 from __future__ import annotations
 
-import json
 import logging
 import textwrap
 import time
@@ -483,13 +482,27 @@ class RiskAssessmentAgent:
     def __init__(self) -> None:
         if AsyncOpenAI is None:
             raise RuntimeError("The 'openai' package is not installed. Run: pip install openai")
-        # AsyncOpenAI is the async-native client. It maintains an httpx
-        # connection pool internally — do not create one per request.
+        # Keep SDK internal retries low & bounded timeout so CI/PR pipelines never stall
         self._client = AsyncOpenAI(
             api_key=settings.openai_api_key.get_secret_value(),
+            timeout=10.0,
+            max_retries=1,
         )
         self._model = settings.openai_model
         self._system_prompt = _build_system_prompt()
+        self._disabled_until: float = 0.0
+
+    @property
+    def is_temporarily_disabled(self) -> bool:
+        return time.monotonic() < self._disabled_until
+
+    def _trip_circuit_if_quota_error(self, exc: Exception) -> bool:
+        msg = str(exc).lower()
+        if "insufficient_quota" in msg or "no credits" in msg or "billing" in msg:
+            self._disabled_until = time.monotonic() + 300.0
+            logger.warning("OpenAI quota exhausted — tripping 5m circuit breaker to deterministic engine.")
+            return True
+        return False
 
     async def assess(
         self,
@@ -499,6 +512,8 @@ class RiskAssessmentAgent:
         blast_radius: BlastRadiusResult,
         similar_incidents: list[IncidentRecord],
     ) -> RiskAssessment:
+        if self.is_temporarily_disabled:
+            raise RuntimeError("OpenAI agent temporarily bypassed (quota circuit breaker active).")
         """
         Run the risk assessment agent and return a validated ``RiskAssessment``.
 
@@ -579,6 +594,8 @@ class RiskAssessmentAgent:
                 return await self._call_api(user_message)
 
             except RateLimitError as exc:
+                if self._trip_circuit_if_quota_error(exc):
+                    raise
                 wait = 2 ** attempt  # Exponential back-off: 2s, 4s, 8s
                 logger.warning(
                     "OpenAI rate limit hit (attempt %d/%d). Retrying in %ds.",
@@ -683,42 +700,24 @@ class RiskAssessmentAgent:
         return message.parsed
 
     async def get_embedding(self, text: str) -> list[float]:
-        """
-        Generate a text embedding for use in the $vectorSearch query.
-
-        Wraps the OpenAI Embeddings API. The embedding model must match
-        the model used to generate the stored incident embeddings — using
-        different models produces incompatible vector spaces.
-
-        Args:
-            text: The text to embed (typically a summary of the changeset).
-
-        Returns:
-            A 1536-dimensional float list (for ``text-embedding-3-small``).
-
-        Raises:
-            ``openai.APIError``: On API failure.
-
-        Example::
-
-            agent = RiskAssessmentAgent()
-            emb = await agent.get_embedding("payment retry logic exponential backoff")
-            incidents = await find_similar_incidents(db, emb, "payment-service")
-        """
-        response = await self._client.embeddings.create(
-            model=settings.openai_embedding_model,
-            input=text,
-            # ``float`` encoding returns 1536 raw floats.
-            # ``base64`` is more bandwidth-efficient but requires decoding.
-            encoding_format="float",
-        )
-        embedding = response.data[0].embedding
-        logger.debug(
-            "Embedding generated: model=%s, dimensions=%d.",
-            settings.openai_embedding_model,
-            len(embedding),
-        )
-        return embedding
+        if self.is_temporarily_disabled:
+            raise RuntimeError("OpenAI embeddings temporarily bypassed (quota circuit breaker active).")
+        try:
+            response = await self._client.embeddings.create(
+                model=settings.openai_embedding_model,
+                input=text,
+                encoding_format="float",
+            )
+            embedding = response.data[0].embedding
+            logger.debug(
+                "Embedding generated: model=%s, dimensions=%d.",
+                settings.openai_embedding_model,
+                len(embedding),
+            )
+            return embedding
+        except Exception as exc:
+            self._trip_circuit_if_quota_error(exc)
+            raise
 
     async def close(self) -> None:
         """

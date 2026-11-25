@@ -9,13 +9,14 @@ Single source of truth used by:
 
 from __future__ import annotations
 
+import asyncio
 import datetime
 import logging
 import time
 import uuid
 from typing import Any
 
-from deployguard.agent.risk_agent import RiskAssessmentAgent, RiskLevel as AgentRiskLevel
+from deployguard.agent.risk_agent import RiskAssessmentAgent
 from deployguard.config import settings
 from deployguard.core.ast_analyzer import (
     ASTAnalyzer,
@@ -64,6 +65,7 @@ async def run_pr_analysis(
     db_client: MongoDBClient | None = None,
     agent: RiskAssessmentAgent | None = None,
     owner_email: str | None = None,
+    workspace_id: str | None = None,
     assessment_id: str | None = None,
     policy: dict[str, Any] | None = None,
     post_to_github: bool = True,
@@ -90,6 +92,7 @@ async def run_pr_analysis(
         source=source,
         status="RUNNING",
         owner_email=owner_email,
+        workspace_id=workspace_id,
     )
 
     if db_client is not None:
@@ -120,10 +123,46 @@ async def run_pr_analysis(
                     pr_files_meta = await github.get_pull_request_files(pr_number)
                 except Exception:
                     pr_files_meta = []
+                # Fallback when raw unified diff is empty/truncated: reconstruct FileDiff entries from PR files metadata
+                for pf in pr_files_meta:
+                    fname = pf.get("filename", "")
+                    if not fname:
+                        continue
+                    patch_text = pf.get("patch") or ""
+                    if patch_text:
+                        synthetic = f"diff --git a/{fname} b/{fname}\n--- a/{fname}\n+++ b/{fname}\n{patch_text}\n"
+                        parsed = DiffParser().parse(synthetic)
+                        if parsed:
+                            file_diffs.extend(parsed)
+                            continue
+                    file_diffs.append(
+                        FileDiff(
+                            filename=fname,
+                            old_filename=pf.get("previous_filename") or fname,
+                            is_new_file=pf.get("status") == "added",
+                            is_deleted_file=pf.get("status") == "removed",
+                            is_renamed=pf.get("status") == "renamed",
+                        )
+                    )
 
             changed_filenames = [fd.filename for fd in file_diffs] or [
                 f.get("filename", "") for f in pr_files_meta if f.get("filename")
             ]
+
+            sem = asyncio.Semaphore(6)
+
+            async def _fetch_file_pair(fd: FileDiff) -> tuple[FileDiff, str | None, str | None]:
+                async with sem:
+                    head_src = None
+                    base_src = None
+                    if fd.filename.endswith(tuple(_PYTHON_EXTS)):
+                        if not fd.is_deleted_file:
+                            head_src = await github.try_get_file_content(fd.filename, head_sha)
+                        if base_sha and not fd.is_new_file:
+                            base_src = await github.try_get_file_content(fd.old_filename, base_sha)
+                    return fd, head_src, base_src
+
+            fetched_pairs = await asyncio.gather(*[_fetch_file_pair(fd) for fd in file_diffs])
 
             ast_analyzer = ASTAnalyzer()
             file_analyses: list[FileAnalysis] = []
@@ -132,7 +171,7 @@ async def run_pr_analysis(
             changed_file_symbols: dict[str, list[str]] = {}
             diff_preview: list[dict[str, str]] = []
 
-            for fd in file_diffs:
+            for fd, head_src, base_src in fetched_pairs:
                 filename = fd.filename
                 ext = f".{filename.rsplit('.', 1)[-1].lower()}" if "." in filename else ""
                 is_py = ext in _PYTHON_EXTS
@@ -146,26 +185,19 @@ async def run_pr_analysis(
                 )
 
                 if is_py:
-                    head_src: str | None = None
-                    base_src: str | None = None
-
-                    if not fd.is_deleted_file:
-                        head_src = await github.try_get_file_content(filename, head_sha)
-                        if head_src is not None:
-                            head_sources[filename] = head_src
-                            try:
-                                syms = ast_analyzer.analyze(
-                                    source_code=head_src,
-                                    filename=filename,
-                                    modified_lines=fd.all_modified_lines,
-                                )
-                                fa.affected_symbols = syms
-                            except ASTAnalysisError as exc:
-                                fa.is_ast_eligible = False
-                                fa.parse_error = str(exc)
-
-                    if base_sha and not fd.is_new_file:
-                        base_src = await github.try_get_file_content(fd.old_filename, base_sha)
+                    if head_src is not None:
+                        head_sources[filename] = head_src
+                        mod_lines = fd.all_modified_lines or set(range(1, len(head_src.splitlines()) + 1))
+                        try:
+                            syms = ast_analyzer.analyze(
+                                source_code=head_src,
+                                filename=filename,
+                                modified_lines=mod_lines,
+                            )
+                            fa.affected_symbols = syms
+                        except ASTAnalysisError as exc:
+                            fa.is_ast_eligible = False
+                            fa.parse_error = str(exc)
 
                     if base_src is not None:
                         cmp_res = compare_ast_versions(base_src, head_src, filename)
@@ -193,14 +225,19 @@ async def run_pr_analysis(
                 if len(diff_preview) >= 6:
                     break
 
-            # Cross-file dependency analysis across repo Python files (non-fatal)
+            # Cross-file dependency analysis across repo Python files (bounded parallel fetch)
             if changed_file_symbols and head_sha != "HEAD":
-                sibling_paths = await github.get_repo_python_files(head_sha, max_files=8)
-                for sp in sibling_paths:
-                    if sp not in head_sources:
-                        src = await github.try_get_file_content(sp, head_sha)
-                        if src:
-                            head_sources[sp] = src
+                sibling_paths = await github.get_repo_python_files(head_sha, max_files=25)
+                missing_paths = [sp for sp in sibling_paths if sp not in head_sources]
+
+                async def _fetch_sibling(sp: str) -> tuple[str, str | None]:
+                    async with sem:
+                        return sp, await github.try_get_file_content(sp, head_sha)
+
+                sibling_results = await asyncio.gather(*[_fetch_sibling(sp) for sp in missing_paths])
+                for sp, src in sibling_results:
+                    if src:
+                        head_sources[sp] = src
 
             dep_graph = build_cross_file_impact_graph(head_sources, changed_file_symbols)
             ast_duration_ms = (time.monotonic() - started) * 1000
@@ -294,12 +331,16 @@ async def run_pr_analysis(
                 except Exception as exc:
                     logger.debug("%s Vector incident search skipped: %s", log_prefix, exc)
 
-            # Resolve tenant policy if available
+            # Resolve workspace/tenant policy if available
             active_policy = policy or {}
             if not active_policy and db_client is not None:
                 try:
-                    pol_query = {"owner_email": owner_email} if owner_email else {"_id": "active_policy"}
-                    pdoc = await db_client.db["enterprise_policy"].find_one(pol_query)
+                    if workspace_id:
+                        pdoc = await db_client.db["enterprise_policy"].find_one({"workspace_id": workspace_id})
+                    elif owner_email:
+                        pdoc = await db_client.db["enterprise_policy"].find_one({"owner_email": owner_email})
+                    else:
+                        pdoc = await db_client.db["enterprise_policy"].find_one({"_id": "active_policy"})
                     if pdoc:
                         active_policy = pdoc
                 except Exception:
