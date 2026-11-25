@@ -1519,8 +1519,8 @@ function switchTab(tabKey) {
     const btn = document.getElementById(`nav-btn-${k}`);
     if (btn) {
       btn.className = k === tabKey
-        ? "px-3 py-2 rounded-lg bg-indigo-50 text-indigo-700 transition"
-        : "px-3 py-2 rounded-lg text-slate-600 hover:bg-slate-100 transition";
+        ? "px-2.5 py-2 rounded-lg bg-indigo-50 text-indigo-700 transition whitespace-nowrap"
+        : "px-2.5 py-2 rounded-lg text-slate-600 hover:bg-slate-100 transition whitespace-nowrap";
     }
   });
   if (tabKey === "blast") setTimeout(renderBlastNetwork, 80);

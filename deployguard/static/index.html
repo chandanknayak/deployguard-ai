@@ -39,16 +39,16 @@
       <div class="orb w-40 h-40 bg-cyan-400 top-1/2 left-1/3" style="animation-delay: 4s;"></div>
       <div class="absolute inset-0 hero-grid"></div>
 
-      <div class="relative z-10 flex flex-col justify-between p-12 w-full">
-        <div class="flex items-center space-x-3">
-          <div class="w-11 h-11 rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center text-lg font-bold shadow-lg shadow-indigo-500/30">🛡️</div>
+      <div class="relative z-10 flex flex-col justify-between gap-6 p-8 xl:p-10 w-full">
+        <div class="flex items-center space-x-3 shrink-0">
+          <div class="w-10 h-10 rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center text-lg font-bold shadow-lg shadow-indigo-500/30">🛡️</div>
           <div>
             <span class="text-xl font-extrabold tracking-tight">DeployGuard AI</span>
             <span class="ml-2 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 uppercase tracking-wider">Enterprise RBAC Gate</span>
           </div>
         </div>
 
-        <div class="max-w-lg space-y-6 -mt-6">
+        <div class="max-w-lg space-y-5 my-auto">
           <h1 class="text-4xl font-black leading-[1.15] tracking-tight">
             Real GitHub Workflow.<br>
             <span class="bg-gradient-to-r from-indigo-400 via-violet-400 to-cyan-400 bg-clip-text text-transparent">Zero Fake Feeds.</span>
@@ -184,28 +184,28 @@
 
     <!-- Top Navigation Bar -->
     <header class="sticky top-0 z-40 w-full bg-white/90 backdrop-blur-xl border-b border-slate-200/80">
-      <div class="max-w-[1380px] mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-2">
-        <div class="flex items-center space-x-3 min-w-0">
+      <div class="max-w-[1440px] mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-3">
+        <div class="flex items-center space-x-2.5 min-w-0 shrink-0">
           <div class="w-9 h-9 rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 text-white flex items-center justify-center shadow-md shadow-indigo-500/20 shrink-0">
             <span class="text-base">🛡️</span>
           </div>
           <div class="min-w-0">
-            <div class="flex items-center space-x-2">
-              <span class="font-extrabold text-base text-slate-900 tracking-tight">DeployGuard</span>
-              <span id="header-company-name" class="text-[10px] font-bold text-slate-700 bg-slate-100 px-2 py-0.5 rounded-md uppercase tracking-wider truncate max-w-[140px]">Workspace</span>
-              <span id="header-role-badge" class="text-[10px] font-black px-2 py-0.5 rounded-full uppercase tracking-wider role-devops_admin">DEVOPS ADMIN</span>
+            <div class="flex items-center space-x-1.5">
+              <span class="font-extrabold text-sm xl:text-base text-slate-900 tracking-tight whitespace-nowrap">DeployGuard</span>
+              <span id="header-company-name" class="hidden xl:inline text-[10px] font-bold text-slate-700 bg-slate-100 px-2 py-0.5 rounded-md uppercase tracking-wider whitespace-nowrap max-w-[130px] truncate">Workspace</span>
+              <span id="header-role-badge" class="text-[10px] font-black px-2 py-0.5 rounded-full uppercase tracking-wider whitespace-nowrap role-devops_admin">DEVOPS ADMIN</span>
             </div>
-            <p id="header-github-badge" class="text-[10px] text-slate-500 truncate">GitHub not linked</p>
+            <p id="header-github-badge" class="text-[10px] text-slate-500 truncate max-w-[260px]">GitHub not linked</p>
           </div>
         </div>
 
-        <nav class="hidden lg:flex items-center space-x-1 text-[12px] font-semibold">
-          <button onclick="switchTab('setup')" id="nav-btn-setup" class="px-3 py-2 rounded-lg text-slate-600 hover:bg-slate-100 transition">1. Setup &amp; Team</button>
-          <button onclick="switchTab('prs')" id="nav-btn-prs" class="px-3 py-2 rounded-lg bg-indigo-50 text-indigo-700 transition">2. Pull Requests</button>
-          <button onclick="switchTab('blast')" id="nav-btn-blast" class="px-3 py-2 rounded-lg text-slate-600 hover:bg-slate-100 transition">3. Impact Map</button>
-          <button onclick="switchTab('release')" id="nav-btn-release" class="px-3 py-2 rounded-lg text-slate-600 hover:bg-slate-100 transition">4. Deploy &amp; Audit</button>
-          <button onclick="switchTab('policy')" id="nav-btn-policy" class="px-3 py-2 rounded-lg text-slate-600 hover:bg-slate-100 transition">5. Policy</button>
-          <button onclick="switchTab('guide')" id="nav-btn-guide" class="px-3 py-2 rounded-lg text-slate-600 hover:bg-slate-100 transition">? Guide</button>
+        <nav class="hidden lg:flex items-center space-x-0.5 text-[12px] font-semibold shrink-0">
+          <button onclick="switchTab('setup')" id="nav-btn-setup" class="px-2.5 py-2 rounded-lg text-slate-600 hover:bg-slate-100 transition whitespace-nowrap">1. Setup &amp; Team</button>
+          <button onclick="switchTab('prs')" id="nav-btn-prs" class="px-2.5 py-2 rounded-lg bg-indigo-50 text-indigo-700 transition whitespace-nowrap">2. Pull Requests</button>
+          <button onclick="switchTab('blast')" id="nav-btn-blast" class="px-2.5 py-2 rounded-lg text-slate-600 hover:bg-slate-100 transition whitespace-nowrap">3. Impact Map</button>
+          <button onclick="switchTab('release')" id="nav-btn-release" class="px-2.5 py-2 rounded-lg text-slate-600 hover:bg-slate-100 transition whitespace-nowrap">4. Deploy &amp; Audit</button>
+          <button onclick="switchTab('policy')" id="nav-btn-policy" class="px-2.5 py-2 rounded-lg text-slate-600 hover:bg-slate-100 transition whitespace-nowrap">5. Policy</button>
+          <button onclick="switchTab('guide')" id="nav-btn-guide" class="px-2.5 py-2 rounded-lg text-slate-600 hover:bg-slate-100 transition whitespace-nowrap">? Guide</button>
         </nav>
 
         <div class="flex items-center space-x-2 shrink-0">
@@ -294,7 +294,7 @@
             <div class="flex items-center justify-between border-b border-slate-200 pb-3">
               <div>
                 <h2 class="text-base font-extrabold text-slate-900">Step 1 — Real GitHub Sandbox Repository</h2>
-                <p class="text-xs text-slate-500 mt-0.5">Create a real GitHub repo seeded with Python microservices (`payments.py` + `checkout.py` + tests) or connect an existing one.</p>
+                <p class="text-xs text-slate-500 mt-0.5">Create a real GitHub repo seeded with Python microservices (<code class="bg-slate-100 px-1 rounded">payments.py</code> + <code class="bg-slate-100 px-1 rounded">checkout.py</code> + tests) or connect an existing one.</p>
               </div>
               <span class="text-xs font-bold px-2.5 py-1 rounded-lg bg-indigo-50 text-indigo-700 border border-indigo-200">DevOps Admin</span>
             </div>
@@ -495,7 +495,7 @@
           <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200 pb-4">
             <div>
               <h2 class="text-lg font-extrabold text-slate-900">Cross-File AST &amp; Microservice Impact Map</h2>
-              <p class="text-xs text-slate-500 mt-0.5">Real trace: Modified File → Changed/Removed Symbol → Downstream Consumer/Route &amp; MongoDB `$graphLookup` blast radius.</p>
+              <p class="text-xs text-slate-500 mt-0.5">Real trace: Modified File → Changed/Removed Symbol → Downstream Consumer/Route &amp; MongoDB <code class="bg-slate-100 px-1 rounded text-indigo-600">$graphLookup</code> blast radius.</p>
             </div>
             <div class="flex flex-wrap items-center gap-2 text-xs">
               <span class="px-2.5 py-1 rounded-lg bg-indigo-50 text-indigo-700 border border-indigo-200 font-bold">Modified File</span>
