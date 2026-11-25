@@ -592,7 +592,11 @@
       activeRepo: "",
       prs: [],
       selectedPRIndex: 0,
-      availableGitHubRepos: []
+      availableGitHubRepos: [],
+      demoAuditLogs: [
+        { timestamp: "2026-11-25 08:15:00", action: "SCAN_PASS", repo: "demo-org/payments-api", pr_number: 101, operator: "deployguard-bot" },
+        { timestamp: "2026-11-25 08:20:12", action: "MERGE_BLOCKED", repo: "demo-org/payments-api", pr_number: 102, operator: "policy-gate" }
+      ]
     };
 
     let visNetwork = null;
@@ -964,12 +968,14 @@
       let loaded = [];
 
       try {
-        if (STATE.token && STATE.user?.github_connected) {
-          const r = await fetch(`${API_BASE}/repos/${owner}/${repo}/pulls`, { headers: authHeaders() });
-          if (r.ok) {
-            const d = await r.json();
-            loaded = (d.pulls || []).map(normalizePR);
-          }
+        const url = (STATE.token && STATE.user?.github_connected)
+          ? `${API_BASE}/repos/${owner}/${repo}/pulls`
+          : `${API_BASE}/enterprise/repos/${owner}/${repo}/pulls`;
+
+        const r = await fetch(url, { headers: authHeaders() });
+        if (r.ok) {
+          const d = await r.json();
+          loaded = (d.pulls || []).map(normalizePR);
         }
       } catch {}
 
@@ -1198,6 +1204,26 @@
         out.innerText = `Running AST + Impact scan for PR #${pr.pr_number}...`;
       }
 
+      if (STATE.isDemoSession) {
+        setTimeout(() => {
+          renderPRCards();
+          renderPRDetails();
+          if (out) {
+            out.innerText = `✓ Demo Scan Complete: ${pr.risk_level} (${pr.risk_score}/100)\nBreaking APIs: ${pr.ast_summary.breaking_changes} | Affected: ${pr.blast_radius.affected_services.join(", ")}`;
+          }
+          STATE.demoAuditLogs.unshift({
+            timestamp: new Date().toISOString().slice(0, 19).replace("T", " "),
+            action: `SCAN_${pr.risk_level}`,
+            repo: STATE.activeRepo,
+            pr_number: pr.pr_number,
+            operator: STATE.user?.email || "demo"
+          });
+          loadAuditLogs();
+          showToast(`PR #${pr.pr_number} scanned: ${pr.risk_level} (${pr.risk_score}/100)`);
+        }, 450);
+        return;
+      }
+
       try {
         const res = await fetch(`${API_BASE}/enterprise/repos/${owner}/${repo}/pulls/${pr.pr_number}/analyze`, {
           method: "POST",
@@ -1237,6 +1263,29 @@
         if (!overrideReason) return;
       }
 
+      if (STATE.isDemoSession) {
+        if (pr.risk_level === "BLOCK" && !isOverride) {
+          showToast(`Blocked: PR #${pr.pr_number} risk score (${pr.risk_score}) exceeds safe limit. Check Admin Override to force.`, true);
+          return;
+        }
+        pr.decision = "MERGED";
+        pr.plain_explanation = isOverride
+          ? `Merged via Admin Override (${overrideReason}). Logged to audit trail.`
+          : "Merged cleanly after passing DeployGuard safety checks.";
+        STATE.demoAuditLogs.unshift({
+          timestamp: new Date().toISOString().slice(0, 19).replace("T", " "),
+          action: isOverride ? "OVERRIDE_MERGE" : "SAFE_MERGE",
+          repo: STATE.activeRepo,
+          pr_number: pr.pr_number,
+          operator: STATE.user?.email || "demo"
+        });
+        renderPRCards();
+        renderPRDetails();
+        loadAuditLogs();
+        showToast(`Merged PR #${pr.pr_number} in Demo Workspace!`);
+        return;
+      }
+
       showToast(`Merging ${STATE.activeRepo}#${pr.pr_number}...`);
       try {
         const res = await fetch(`${API_BASE}/enterprise/repos/${owner}/${repo}/pulls/${pr.pr_number}/merge`, {
@@ -1272,6 +1321,26 @@
       const fb = document.getElementById("canary-feedback-text");
       btn.innerText = "Deploying...";
 
+      if (STATE.isDemoSession) {
+        const depId = `dep-demo-${Math.floor(1000 + Math.random() * 9000)}`;
+        setTimeout(() => {
+          btn.innerText = `Deployed (${depId})`;
+          fb.innerText = "Healthy · p95: 18.4ms · Errors: 0.00%";
+          fb.className = "text-[11px] text-emerald-600 text-center font-semibold";
+          STATE.demoAuditLogs.unshift({
+            timestamp: new Date().toISOString().slice(0, 19).replace("T", " "),
+            deployment_id: depId,
+            repo: STATE.activeRepo,
+            environment: "staging",
+            traffic_percent: 10,
+            status: "HEALTHY"
+          });
+          loadAuditLogs();
+          showToast(`Canary ${depId} deployed (10% traffic)!`);
+        }, 500);
+        return;
+      }
+
       try {
         const res = await fetch(`${API_BASE}/enterprise/repos/${owner}/${repo}/deploy`, {
           method: "POST",
@@ -1300,6 +1369,15 @@
     async function loadAuditLogs() {
       const term = document.getElementById("live-audit-terminal");
       if (!term) return;
+      if (STATE.isDemoSession) {
+        term.innerHTML = STATE.demoAuditLogs.map(l => {
+          const msg = l.deployment_id
+            ? `[${l.timestamp}] DEPLOY ${l.deployment_id} · ${l.repo} (${l.environment} ${l.traffic_percent}%) · ${l.status}`
+            : `[${l.timestamp}] ${l.action} · ${l.repo} PR #${l.pr_number} by ${l.operator}`;
+          return `<p class="text-emerald-400">${msg}</p>`;
+        }).join("");
+        return;
+      }
       try {
         const res = await fetch(`${API_BASE}/enterprise/audit?limit=15`);
         if (res.ok) {
