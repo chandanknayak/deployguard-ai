@@ -53,6 +53,7 @@ const STATE = {
   collaborators: [],
   auditLogs: [],
   policy: { max_auto_merge_score: 35, staging_health_url: "", deploy_hook_url: "" },
+  oauth: { github_oauth_enabled: false, callback_url: "" },
 };
 
 let visNetwork = null;
@@ -110,11 +111,14 @@ document.addEventListener("DOMContentLoaded", async () => {
   document.getElementById("webhook-url-display").innerText = `${API_BASE}/webhook/github`;
   const params = new URLSearchParams(window.location.search);
   const oauthToken = params.get("oauth_token");
+  const authError = params.get("auth_error");
+  const ghLinked = params.get("github_linked");
   if (oauthToken) {
     STATE.token = oauthToken;
     localStorage.setItem("deployguard_token", oauthToken);
     window.history.replaceState({}, document.title, window.location.pathname);
   }
+  await loadOAuthProviders();
 
   if (STATE.token) {
     try {
@@ -122,7 +126,9 @@ document.addEventListener("DOMContentLoaded", async () => {
       if (meRes.ok) {
         STATE.user = await meRes.json();
         localStorage.setItem("deployguard_user", JSON.stringify(STATE.user));
+        if (ghLinked) window.history.replaceState({}, document.title, window.location.pathname);
         await enterDashboard();
+        if (ghLinked) showToast(`Connected @${ghLinked} via GitHub OAuth!`, false, "🔒");
         return;
       }
     } catch {}
@@ -137,7 +143,72 @@ document.addEventListener("DOMContentLoaded", async () => {
     return;
   }
   showAuthScreen();
+  if (authError) {
+    window.history.replaceState({}, document.title, window.location.pathname);
+    if (authError === "github_oauth_not_configured") {
+      document.getElementById("oauth-setup-hint")?.classList.remove("hidden");
+    } else {
+      const errBox = document.getElementById("auth-error-box");
+      const errText = document.getElementById("auth-error-text");
+      if (errBox && errText) {
+        errText.innerText = authError;
+        errBox.classList.remove("hidden");
+      }
+    }
+  }
 });
+
+async function loadOAuthProviders() {
+  try {
+    const res = await fetch(`${API_BASE}/auth/providers`);
+    if (res.ok) {
+      STATE.oauth = await res.json();
+    }
+  } catch {}
+  const pill = document.getElementById("oauth-status-pill");
+  const cbHint = document.getElementById("oauth-callback-hint");
+  if (cbHint) cbHint.innerText = STATE.oauth.callback_url || `${API_BASE}/auth/github/callback`;
+  if (pill) {
+    if (STATE.oauth.github_oauth_enabled) {
+      pill.innerText = "1-Click Ready";
+      pill.className = "text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200";
+    } else {
+      pill.innerText = "Setup Needed";
+      pill.className = "text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200";
+    }
+  }
+}
+
+function startGitHubOAuthLogin() {
+  if (!STATE.oauth.github_oauth_enabled) {
+    document.getElementById("oauth-setup-hint")?.classList.remove("hidden");
+    return;
+  }
+  window.location.href = `${API_BASE}/auth/github`;
+}
+
+async function startGitHubOAuthLink() {
+  const fb = document.getElementById("gh-connect-feedback");
+  if (!STATE.token) return;
+  try {
+    const res = await fetch(`${API_BASE}/auth/github/link-url`, {
+      method: "POST",
+      headers: authHeaders(),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      if (fb) {
+        fb.classList.remove("hidden");
+        fb.className = "text-xs p-3 rounded-xl bg-amber-50 text-amber-800 border border-amber-200";
+        fb.innerText = extractError(data, "GitHub OAuth not configured");
+      }
+      return;
+    }
+    window.location.href = data.url;
+  } catch {
+    showToast("Could not initiate GitHub OAuth link.", true, "✗");
+  }
+}
 
 function showAuthScreen() {
   document.getElementById("auth-screen").classList.remove("hidden");
@@ -682,9 +753,9 @@ async function addWorkspaceMember() {
   const email = document.getElementById("tm-email").value.trim().toLowerCase();
   const password = document.getElementById("tm-pass").value;
   const role = document.getElementById("tm-role").value;
-  const ghUser = document.getElementById("tm-gh").value.trim();
-  if (!fullName || !email || password.length < 8) {
-    showToast("Enter valid Name, Email, and min 8-char Password.", true, "⚠");
+  const ghUser = document.getElementById("tm-gh").value.trim().replace(/^@+/, "");
+  if (!fullName || !email || (!password && !ghUser) || (password && password.length < 8)) {
+    showToast("Enter Name + Email + either a Password (min 8 chars) or a GitHub username.", true, "⚠");
     return;
   }
   const res = await fetch(`${API_BASE}/enterprise/team/members`, {

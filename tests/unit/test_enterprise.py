@@ -542,6 +542,92 @@ def test_github_oauth_callback_private_email_no_unbound_error():
         assert body["user"]["email"] == "dev-octocat@users.noreply.github.com"
 
 
+def test_github_oauth_providers_link_and_teammate_match():
+    from deployguard.api.routers.auth import _create_oauth_state, _verify_oauth_state
+
+    test_app = create_app()
+    fake_db = FakeDBClient()
+    test_app.state.db = fake_db
+    client = TestClient(test_app)
+
+    prov = client.get("/auth/providers")
+    assert prov.status_code == 200
+    assert "github_oauth_enabled" in prov.json()
+
+    # Register DevOps Admin and invite a passwordless Developer by GitHub username
+    reg = client.post("/auth/register", json={
+        "email": "lead@acme.com",
+        "password": "StrongPassword123",
+        "full_name": "Lead Admin",
+        "company": "Acme",
+    })
+    assert reg.status_code == 200
+    admin_tok = reg.json()["access_token"]
+    ws_id = reg.json()["user"]["workspace_id"]
+
+    inv = client.post(
+        "/enterprise/team/members",
+        headers={"Authorization": f"Bearer {admin_tok}"},
+        json={
+            "full_name": "Dost Dev",
+            "email": "dost@team-alias.com",
+            "password": "",
+            "role": "developer",
+            "github_username": "@DostHandle",
+        },
+    )
+    assert inv.status_code == 200
+    assert inv.json()["member"]["github_username"] == "DostHandle"
+
+    # Simulate Dost logging in directly via GitHub OAuth with a DIFFERENT personal GitHub email
+    state = _create_oauth_state()
+    mock_http = MagicMock()
+    mock_http.__aenter__ = AsyncMock(return_value=mock_http)
+    mock_http.__aexit__ = AsyncMock(return_value=None)
+    mock_http.post = AsyncMock(return_value=MagicMock(json=lambda: {"access_token": "gho_dost_token"}))
+    mock_http.get = AsyncMock(return_value=MagicMock(
+        status_code=200,
+        json=lambda: {"login": "dosthandle", "email": "dost.personal@gmail.com", "name": "Dost"},
+    ))
+
+    with patch("deployguard.api.routers.auth.httpx.AsyncClient", return_value=mock_http):
+        cb = client.get(
+            f"/auth/github/callback?code=oauthcode&state={state}",
+            headers={"Accept": "application/json"},
+        )
+        assert cb.status_code == 200
+        body = cb.json()
+        assert body["user"]["workspace_id"] == ws_id
+        assert body["user"]["role"] == "developer"
+        assert body["user"]["github_username"] == "dosthandle"
+
+    # Also test link_email signed state flow for linking OAuth onto existing account
+    with patch.dict("os.environ", {"GITHUB_CLIENT_ID": "cid_123", "GITHUB_CLIENT_SECRET": "csec_456"}):
+        link_resp = client.post("/auth/github/link-url", headers={"Authorization": f"Bearer {admin_tok}"})
+        assert link_resp.status_code == 200
+        assert "github.com/login/oauth/authorize" in link_resp.json()["url"]
+
+    link_state = _create_oauth_state(link_email="lead@acme.com")
+    verified = _verify_oauth_state(link_state)
+    assert verified is not None and verified["link_email"] == "lead@acme.com"
+
+    mock_http2 = MagicMock()
+    mock_http2.__aenter__ = AsyncMock(return_value=mock_http2)
+    mock_http2.__aexit__ = AsyncMock(return_value=None)
+    mock_http2.post = AsyncMock(return_value=MagicMock(json=lambda: {"access_token": "gho_admin_token"}))
+    mock_http2.get = AsyncMock(return_value=MagicMock(
+        status_code=200,
+        json=lambda: {"login": "chandan-admin", "email": "lead@acme.com", "name": "Lead"},
+    ))
+    with patch("deployguard.api.routers.auth.httpx.AsyncClient", return_value=mock_http2):
+        linked = client.get(
+            f"/auth/github/callback?code=c2&state={link_state}",
+            headers={"Accept": "application/json"},
+        )
+        assert linked.status_code == 200
+        assert linked.json()["github_username"] == "chandan-admin"
+
+
 class TestWebhookIngestion:
     client = TestClient(app)
 

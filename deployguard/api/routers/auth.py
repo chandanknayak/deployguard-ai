@@ -99,6 +99,10 @@ def _jwt_secret() -> str:
 
 
 def _public_url(request: Request | None = None) -> str:
+    if request is not None:
+        host = (request.url.hostname or "").lower()
+        if host in ("localhost", "127.0.0.1"):
+            return str(request.base_url).rstrip("/")
     env_pub = os.environ.get("PUBLIC_URL") or settings.public_url
     if env_pub and "your-deployguard" not in env_pub:
         return env_pub.rstrip("/")
@@ -151,24 +155,41 @@ def verify_jwt(token: str) -> dict[str, Any] | None:
         return None
 
 
-def _create_oauth_state() -> str:
+def _github_oauth_credentials() -> tuple[str, str]:
+    """Read GitHub OAuth App credentials dynamically from env/settings."""
+    cid = (GITHUB_CLIENT_ID or os.environ.get("GITHUB_CLIENT_ID") or settings.github_client_id or "").strip()
+    csec = (
+        GITHUB_CLIENT_SECRET
+        or os.environ.get("GITHUB_CLIENT_SECRET")
+        or settings.github_client_secret.get_secret_value()
+        or ""
+    ).strip()
+    return cid, csec
+
+
+def _create_oauth_state(link_email: str | None = None) -> str:
     """Stateless HMAC-signed OAuth state safe across multi-worker uvicorn."""
     nonce = secrets.token_urlsafe(12)
-    payload = _b64url_encode(_json.dumps({"n": nonce, "ts": int(time.time())}).encode())
+    body: dict[str, Any] = {"n": nonce, "ts": int(time.time())}
+    if link_email:
+        body["link_email"] = link_email.strip().lower()
+    payload = _b64url_encode(_json.dumps(body).encode())
     sig = hmac.new(_jwt_secret().encode(), payload.encode(), hashlib.sha256).digest()
     return f"{payload}.{_b64url_encode(sig)}"
 
 
-def _verify_oauth_state(state: str) -> bool:
+def _verify_oauth_state(state: str) -> dict[str, Any] | None:
     try:
         payload_b64, sig_b64 = state.split(".", 1)
         expected = hmac.new(_jwt_secret().encode(), payload_b64.encode(), hashlib.sha256).digest()
         if not hmac.compare_digest(_b64url_decode(sig_b64), expected):
-            return False
+            return None
         data = _json.loads(_b64url_decode(payload_b64))
-        return (time.time() - int(data.get("ts", 0))) <= _OAUTH_STATE_TTL_SEC
+        if (time.time() - int(data.get("ts", 0))) > _OAUTH_STATE_TTL_SEC:
+            return None
+        return data
     except Exception:
-        return False
+        return None
 
 
 def hash_password(password: str) -> str:
@@ -492,39 +513,88 @@ async def logout():
     return {"logged_out": True}
 
 
-@router.get("/github", summary="Start GitHub OAuth flow")
-async def github_oauth_start(request: Request):
-    """Redirect browser to GitHub OAuth consent page."""
-    if not GITHUB_CLIENT_ID:
-        raise HTTPException(status_code=503, detail="GitHub OAuth not configured")
+@router.get("/providers", summary="Inspect available authentication providers (GitHub OAuth readiness)")
+async def auth_providers(request: Request):
+    cid, csec = _github_oauth_credentials()
+    base = _public_url(request)
+    return {
+        "github_oauth_enabled": bool(cid and csec),
+        "oauth_start_url": "/auth/github",
+        "callback_url": f"{base}/auth/github/callback",
+    }
 
-    state = _create_oauth_state()
+
+def _build_github_authorize_url(request: Request, link_email: str | None = None) -> str:
+    cid, _ = _github_oauth_credentials()
+    state = _create_oauth_state(link_email=link_email)
     base = _public_url(request)
     params = {
-        "client_id": GITHUB_CLIENT_ID,
+        "client_id": cid,
         "scope": "read:user user:email repo",
         "state": state,
         "redirect_uri": f"{base}/auth/github/callback",
     }
-    return RedirectResponse(f"https://github.com/login/oauth/authorize?{urlencode(params)}")
+    return f"https://github.com/login/oauth/authorize?{urlencode(params)}"
+
+
+@router.get("/github", summary="Start GitHub OAuth flow")
+async def github_oauth_start(request: Request):
+    """Redirect browser to GitHub OAuth consent page."""
+    cid, csec = _github_oauth_credentials()
+    if not cid or not csec:
+        if "text/html" in request.headers.get("accept", ""):
+            return RedirectResponse("/?auth_error=github_oauth_not_configured")
+        raise HTTPException(status_code=503, detail="GitHub OAuth not configured")
+
+    return RedirectResponse(_build_github_authorize_url(request))
+
+
+@router.post("/github/link-url", summary="Generate 1-click GitHub OAuth link URL for signed-in user")
+async def github_oauth_link_url(
+    request: Request,
+    current_user: Annotated[dict[str, Any], Depends(get_current_user)],
+):
+    """Return GitHub authorize URL bound via signed state to the current workspace account."""
+    cid, csec = _github_oauth_credentials()
+    if not cid or not csec:
+        raise HTTPException(
+            status_code=503,
+            detail="GitHub OAuth App (GITHUB_CLIENT_ID / GITHUB_CLIENT_SECRET) is not configured on this server yet. Paste a PAT below or ask Admin to configure OAuth.",
+        )
+    return {"url": _build_github_authorize_url(request, link_email=current_user["email"])}
 
 
 @router.get("/github/callback", summary="GitHub OAuth callback")
 async def github_oauth_callback(
-    code: str,
-    state: str,
     request: Request,
+    state: str = "",
+    code: Optional[str] = None,
+    error: Optional[str] = None,
+    error_description: Optional[str] = None,
     token: Optional[str] = None,
 ):
-    if not _verify_oauth_state(state):
-        raise HTTPException(status_code=400, detail="Invalid or expired OAuth state")
+    wants_json = "application/json" in request.headers.get("accept", "")
+    if error:
+        if wants_json:
+            raise HTTPException(status_code=400, detail=error_description or error)
+        return RedirectResponse(f"/?{urlencode({'auth_error': error_description or error})}")
 
+    if not code:
+        raise HTTPException(status_code=400, detail="Missing OAuth authorization code")
+
+    state_data = _verify_oauth_state(state)
+    if not state_data:
+        if wants_json:
+            raise HTTPException(status_code=400, detail="Invalid or expired OAuth state")
+        return RedirectResponse("/?auth_error=OAuth+session+expired.+Please+try+again.")
+
+    cid, csec = _github_oauth_credentials()
     async with httpx.AsyncClient() as client:
         resp = await client.post(
             "https://github.com/login/oauth/access_token",
             data={
-                "client_id": GITHUB_CLIENT_ID,
-                "client_secret": GITHUB_CLIENT_SECRET,
+                "client_id": cid,
+                "client_secret": csec,
                 "code": code,
             },
             headers={"Accept": "application/json"},
@@ -534,7 +604,10 @@ async def github_oauth_callback(
 
     gh_access_token = gh_token_data.get("access_token")
     if not gh_access_token:
-        raise HTTPException(status_code=400, detail="GitHub OAuth failed")
+        detail = gh_token_data.get("error_description") or "GitHub OAuth failed"
+        if wants_json:
+            raise HTTPException(status_code=400, detail=detail)
+        return RedirectResponse(f"/?{urlencode({'auth_error': detail})}")
 
     async with httpx.AsyncClient() as client:
         r = await client.get(
@@ -551,10 +624,15 @@ async def github_oauth_callback(
                 timeout=15,
             )
             emails = er.json() if er.status_code == 200 else []
-            primary = next((e["email"] for e in emails if e.get("primary")), None)
+            primary = (
+                next((e["email"] for e in emails if e.get("primary") and e.get("verified")), None)
+                or next((e["email"] for e in emails if e.get("verified")), None)
+                or next((e["email"] for e in emails if e.get("primary")), None)
+            )
             gh_user["email"] = primary
 
-    username = gh_user.get("login") or "github-user"
+    username = (gh_user.get("login") or "github-user").strip()
+    username_lower = username.lower()
     email = (gh_user.get("email") or f"{username}@users.noreply.github.com").strip().lower()
     encrypted_gh_token = encrypt_secret(gh_access_token)
 
@@ -562,22 +640,29 @@ async def github_oauth_callback(
     col = db["users"]
     now = datetime.now(timezone.utc).isoformat()
 
-    if token:
+    link_email = state_data.get("link_email")
+    if token and not link_email:
         payload = verify_jwt(token)
         if not payload:
             raise HTTPException(status_code=401, detail="Invalid JWT")
-        target_email = payload["email"].strip().lower()
+        link_email = payload["email"].strip().lower()
+
+    if link_email:
+        existing_link_user = await col.find_one({"email": link_email})
+        if not existing_link_user:
+            raise HTTPException(status_code=404, detail="Target account not found")
         await col.update_one(
-            {"email": target_email},
+            {"email": link_email},
             {"$set": {
                 "github_username": username,
+                "github_username_lower": username_lower,
                 "github_access_token": encrypted_gh_token,
                 "github_connected": True,
                 "updated_at": now,
             }},
         )
-        ws_id = payload.get("workspace_id")
-        if ws_id and payload.get("role") == "devops_admin":
+        ws_id = existing_link_user.get("workspace_id")
+        if ws_id and existing_link_user.get("role") == "devops_admin":
             await db["workspaces"].update_one(
                 {"workspace_id": ws_id},
                 {"$set": {
@@ -586,9 +671,17 @@ async def github_oauth_callback(
                     "updated_at": now,
                 }},
             )
-        return {"message": "GitHub connected successfully", "github_username": username}
+        if wants_json:
+            return {"message": "GitHub connected successfully", "github_username": username}
+        return RedirectResponse(f"/?{urlencode({'github_linked': username})}")
 
+    # Direct "Continue with GitHub" login: match verified email first, then invited @github_username
     user = await col.find_one({"email": email})
+    if not user:
+        user = await col.find_one({"github_username_lower": username_lower})
+    if not user:
+        user = await col.find_one({"github_username": username})
+
     if not user:
         ws_id = make_workspace_id(email)
         company = gh_user.get("company") or f"{username}'s Workspace"
@@ -614,6 +707,7 @@ async def github_oauth_callback(
             "workspace_id": ws_id,
             "role": "devops_admin",
             "github_username": username,
+            "github_username_lower": username_lower,
             "github_access_token": encrypted_gh_token,
             "github_connected": True,
             "connected_repos": [],
@@ -625,16 +719,28 @@ async def github_oauth_callback(
         user = user_doc
     else:
         await col.update_one(
-            {"email": email},
+            {"email": user["email"]},
             {"$set": {
                 "github_username": username,
+                "github_username_lower": username_lower,
                 "github_access_token": encrypted_gh_token,
                 "github_connected": True,
                 "updated_at": now,
             }},
         )
         user["github_username"] = username
+        user["github_username_lower"] = username_lower
         user["github_connected"] = True
+        ws_id = user.get("workspace_id")
+        if ws_id and user.get("role") == "devops_admin":
+            await db["workspaces"].update_one(
+                {"workspace_id": ws_id},
+                {"$set": {
+                    "github_username": username,
+                    "github_access_token": encrypted_gh_token,
+                    "updated_at": now,
+                }},
+            )
 
     user = await ensure_user_workspace(db, user)
     jwt_tok = create_jwt({
@@ -643,7 +749,7 @@ async def github_oauth_callback(
         "role": user["role"],
         "workspace_id": user["workspace_id"],
     })
-    if "application/json" in request.headers.get("accept", ""):
+    if wants_json:
         return {
             "access_token": jwt_tok,
             "token_type": "bearer",
@@ -706,6 +812,7 @@ async def connect_github_pat(
         {"email": current_user["email"]},
         {"$set": {
             "github_username": username,
+            "github_username_lower": username.lower() if username else None,
             "github_access_token": enc_tok,
             "github_connected": True,
             "updated_at": now,

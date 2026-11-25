@@ -572,12 +572,15 @@ async def add_repo_collaborator(
         "devops_admin": "admin",
     }
     permission = perm_map[body.role]
+    gh_user_clean = body.github_username.strip().lstrip("@")
+    if not gh_user_clean:
+        raise HTTPException(status_code=400, detail="Enter a valid GitHub username")
     repo_full = f"{owner}/{repo}"
     try:
         async with GitHubClient(repo_full_name=repo_full, token=gh_token) as gh:
-            res = await gh.add_collaborator(body.github_username.strip(), permission=permission)
+            res = await gh.add_collaborator(gh_user_clean, permission=permission)
     except GitHubAPIError as exc:
-        raise HTTPException(status_code=400, detail=f"Could not invite @{body.github_username}: {exc}")
+        raise HTTPException(status_code=400, detail=f"Could not invite @{gh_user_clean}: {exc}")
 
     db = _db(request)
     await _record_audit(
@@ -585,10 +588,10 @@ async def add_repo_collaborator(
         action="GITHUB_COLLABORATOR_INVITED",
         repo=repo_full,
         current_user=current_user,
-        extra={"target_github_user": body.github_username.strip(), "assigned_role": body.role, "github_permission": permission},
+        extra={"target_github_user": gh_user_clean, "assigned_role": body.role, "github_permission": permission},
     )
     return {
-        "invited": body.github_username.strip(),
+        "invited": gh_user_clean,
         "role": body.role,
         "github_permission": permission,
         "github_response": res,
@@ -687,12 +690,19 @@ async def create_real_demo_pr(
     async with GitHubClient(repo_full_name=repo_full, token=gh_token) as gh:
         repo_meta = await _gh_get(f"https://api.github.com/repos/{repo_full}", gh_token)
         base_branch = repo_meta.get("default_branch", "main")
-        base_sha = await gh.get_branch_sha(base_branch)
+        try:
+            base_sha = await gh.get_branch_sha(base_branch)
+        except GitHubAPIError:
+            # Auto-initialize completely empty repository (e.g. brand-new test repo without README)
+            await gh.create_or_update_file(
+                "README.md", _STARTER_README_MD, "chore: initialize DeployGuard test repository", base_branch
+            )
+            base_sha = await gh.get_branch_sha(base_branch)
 
         suffix = uuid.uuid4().hex[:4]
         branch_name = f"dg-{body.scenario}-{suffix}"
 
-        # Ensure baseline files exist on base_branch when scenario == "block" on non-demo repos
+        # Ensure baseline files exist on base_branch when scenario == "block" or "warn" on empty/external repos
         if body.scenario == "block":
             if await gh.get_file_sha("services/payments.py", base_branch) is None:
                 await gh.create_or_update_file(
@@ -703,6 +713,12 @@ async def create_real_demo_pr(
                     "routes/checkout.py", _STARTER_CHECKOUT_PY, "chore: seed checkout consumer", base_branch
                 )
             base_sha = await gh.get_branch_sha(base_branch)
+        elif body.scenario == "warn":
+            if await gh.get_file_sha("services/auth_tokens.py", base_branch) is None:
+                await gh.create_or_update_file(
+                    "services/auth_tokens.py", _STARTER_AUTH_PY, "chore: seed auth token baseline", base_branch
+                )
+                base_sha = await gh.get_branch_sha(base_branch)
 
         await gh.create_branch(branch_name, base_sha)
 

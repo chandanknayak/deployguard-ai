@@ -82,7 +82,7 @@ class PolicySettings(BaseModel):
 class AddTeamMemberRequest(BaseModel):
     full_name: str = Field(min_length=2)
     email: str
-    password: str = Field(min_length=8)
+    password: str = ""
     role: Literal["developer", "reviewer", "devops_admin"] = "developer"
     github_username: str = ""
 
@@ -221,6 +221,16 @@ async def add_team_member(
     if "@" not in email or "." not in email.split("@")[-1]:
         raise HTTPException(status_code=400, detail="Enter a valid member email address")
 
+    gh_clean = body.github_username.strip().lstrip("@")
+    if body.password:
+        if len(body.password) < 8:
+            raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+    elif not gh_clean:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide a password (min 8 chars) or a GitHub username for GitHub OAuth sign-in",
+        )
+
     existing = await db.db["users"].find_one({"email": email})
     if existing:
         raise HTTPException(status_code=400, detail="Email is already registered in DeployGuard")
@@ -231,12 +241,13 @@ async def add_team_member(
 
     member_doc = {
         "email": email,
-        "password_hash": hash_password(body.password),
+        "password_hash": hash_password(body.password) if body.password else "",
         "full_name": body.full_name.strip(),
         "company": company,
         "workspace_id": ws_id,
         "role": body.role,
-        "github_username": body.github_username.strip() or None,
+        "github_username": gh_clean or None,
+        "github_username_lower": gh_clean.lower() if gh_clean else None,
         "github_access_token": None,
         "github_connected": False,
         "connected_repos": current_user.get("connected_repos", []),

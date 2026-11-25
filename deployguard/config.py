@@ -92,6 +92,14 @@ class Settings(BaseSettings):
         default="https://api.github.com",  # type: ignore[assignment]
         description="Base URL for GitHub REST API (override for GitHub Enterprise).",
     )
+    github_client_id: str = Field(
+        default="",
+        description="GitHub OAuth App Client ID for direct 'Continue with GitHub' login.",
+    )
+    github_client_secret: SecretStr = Field(
+        default=SecretStr(""),
+        description="GitHub OAuth App Client Secret for GitHub OAuth token exchange.",
+    )
 
     # ------------------------------------------------------------------
     # Security & Hosting
